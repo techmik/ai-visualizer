@@ -31,14 +31,22 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
            faces, discovered by scanning the faces/ folder. Drop a new
            folder with an index.html into faces/ and it appears in the
            gallery. That is the whole plugin system.
+  /transcript  GET, polled by the chat box each face carries (core.js:
+           chatInit()): the running conversation as a JSON array of
+           {ts, role, text}, sourced from .voice_transcript.jsonl.
+  /send    POST {"text": "..."}, the chat box's other half: drops the
+           message into .voice_inbox/ for backtalk's own poller to pick
+           up and answer, same as typing in its terminal. The one WRITE
+           this server does to the bus.
 
-READ-ONLY on the signal bus. The bus is three tiny files written by a
-voice line (backtalk writes them natively, github.com/jaredrhod/backtalk):
+Otherwise READ-ONLY on the signal bus. The bus is written by a voice
+line (backtalk writes it natively, github.com/jaredrhod/backtalk):
 
   .voice_state        idle | listening | thinking | speaking
   .voice_waveform     JSON {ts, samples: [64 floats]} while audio plays
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed
+  .voice_transcript.jsonl  one JSON object per line, {ts, role, text}
 
 Where the bus lives comes from "bus_dir" in ai-visualizer.json (default:
 this folder). Point it at your backtalk folder, or point backtalk's
@@ -171,6 +179,23 @@ def read_bus():
             "alert": alert, "loading": loading}
 
 
+def read_transcript():
+    try:
+        lines = (BUS / ".voice_transcript.jsonl").read_text(
+            encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -184,8 +209,38 @@ class Handler(BaseHTTPRequestHandler):
                        "thinking_sound": bool(CFG["thinking_sound"]),
                        "faces": list_faces()}
                 self._send(json.dumps(out).encode(), "application/json")
+            elif path == "/transcript":
+                self._send(json.dumps(read_transcript()).encode(),
+                           "application/json")
             else:
                 self._static(path)
+        except BrokenPipeError:
+            pass
+        except Exception as e:
+            body = json.dumps({"error": str(e)}).encode()
+            self._send(body, "application/json", 500)
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        try:
+            if path != "/send":
+                self._send(b"not found", "text/plain", 404)
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            text = str(body.get("text", "")).strip()
+            if not text:
+                self._send(json.dumps({"error": "empty"}).encode(),
+                           "application/json", 400)
+                return
+            inbox = BUS / ".voice_inbox"
+            inbox.mkdir(exist_ok=True)
+            name = f"{time.time():.6f}-{threading.get_ident()}.msg"
+            tmp = inbox / (name + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(inbox / name)
+            self._send(json.dumps({"ok": True}).encode(),
+                       "application/json")
         except BrokenPipeError:
             pass
         except Exception as e:

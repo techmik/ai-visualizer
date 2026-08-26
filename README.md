@@ -55,6 +55,10 @@ The faces read three tiny files, the same signal-bus contract [backtalk](https:/
 
 Point them at each other in either direction: set `bus_dir` in `ai-visualizer.json` to your backtalk folder, or set `signals_dir` in backtalk's config to this folder. Restart both, say something, and the face performs the real conversation. Anything else that writes those three files works exactly the same, so a custom voice line can drive the faces too.
 
+## Type back
+
+Every face carries a small chat box in the corner (bottom right): a real textarea, so Shift+Enter makes a new line and pasting just works, unlike a terminal. Enter sends the message into backtalk's own conversation exactly like typing in its terminal window would, and the box shows the running transcript back — what you said (typed or spoken) and what the agent replied — polling `.voice_transcript.jsonl` on the same bus. Needs a backtalk new enough to poll `.voice_inbox/` (anything running `_inbox_reader` in `main.py`); older backtalk versions ignore the inbox and the box just won't get answers.
+
 ## The thinking sound
 
 `assets/thinking.wav` is the processing sound from my videos, and it ships here because people kept asking for it. The face plays it in the browser while the agent thinks, and it automatically stays quiet when your voice line is already playing its own, so you never hear it twice. Move the mouse and a small SND toggle appears bottom left; browsers may need one click on the page before they allow audio at all. Turn it off for good with `"thinking_sound": false` in the config.

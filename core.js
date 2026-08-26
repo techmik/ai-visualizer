@@ -266,6 +266,103 @@ const AV = (() => {
     }
   }
 
+  /* --------------------------------- cursor --------------------------------- */
+  // each face's CSS hides the system cursor by default so it never shows on
+  // camera or in an OBS source; show it again while the mouse is actually
+  // moving, then let it fade back out after a beat of no movement
+  function cursorInit() {
+    if (SHOT) return;
+    let hideT = null;
+    addEventListener("mousemove", () => {
+      document.body.style.cursor = "auto";
+      clearTimeout(hideT);
+      hideT = setTimeout(() => { document.body.style.cursor = ""; }, 1500);
+    });
+  }
+
+  /* --------------------------------- chat ---------------------------------- */
+  // A type-and-read dashboard riding the same bus: POST /send drops a
+  // message into backtalk's inbox (server.py), GET /transcript polls
+  // the running conversation (typed AND spoken) back. Injected once
+  // here so every face gets it for free, no per-face wiring.
+  function chatInit() {
+    if (SHOT) return;
+    const wrap = document.createElement("div");
+    wrap.id = "av-chat";
+    wrap.innerHTML =
+      '<div id="av-chat-log"></div>' +
+      '<textarea id="av-chat-input" rows="1" ' +
+      'placeholder="Type a message... Enter to send, Shift+Enter for a new line"></textarea>';
+    document.body.appendChild(wrap);
+    const style = document.createElement("style");
+    style.textContent = `
+      #av-chat{position:fixed;left:56px;top:118px;
+        width:425px;max-width:40vw;
+        z-index:60;font:13px/1.45 "SF Mono",Menlo,Consolas,monospace;
+        display:flex;flex-direction:column;gap:6px}
+      #av-chat, #av-chat *{cursor:auto}
+      #av-chat-log{cursor:text;max-height:62vh;overflow-y:auto;
+        background:rgba(2,10,7,.6);border:1px solid rgba(140,220,180,.18);
+        border-radius:8px;padding:8px 10px}
+      #av-chat-log:empty{display:none}
+      #av-chat-log .av-line{margin:3px 0;white-space:pre-wrap;word-break:break-word}
+      #av-chat-log .av-user{color:#8fc4a8}
+      #av-chat-log .av-assistant{color:#e8f0f2}
+      #av-chat-input{resize:none;background:rgba(2,10,7,.6);
+        border:1px solid rgba(140,220,180,.25);border-radius:8px;color:#e8f0f2;
+        padding:8px 10px;font:inherit;outline:none;max-height:30vh;overflow-y:auto}
+      #av-chat-input:focus{border-color:rgba(140,220,180,.6)}
+    `;
+    document.head.appendChild(style);
+
+    const log = wrap.querySelector("#av-chat-log");
+    const input = wrap.querySelector("#av-chat-input");
+
+    function addLine(role, text) {
+      const d = document.createElement("div");
+      d.className = "av-line av-" + role;
+      d.textContent = (role === "user" ? "> " : "") + text;
+      log.appendChild(d);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function autosize() {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, innerHeight * .3) + "px";
+    }
+    input.addEventListener("input", autosize);
+
+    // Stop every key here from reaching a face's own shortcuts (space,
+    // c, f, ...) — faces bind those on window/document with no target
+    // check, so without this, typing a message would also trigger them.
+    input.addEventListener("keydown", e => {
+      e.stopPropagation();
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = "";
+        autosize();
+        fetch("/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        }).catch(() => {});
+      }
+    });
+
+    let seen = 0;
+    setInterval(async () => {
+      try {
+        const r = await fetch("/transcript", { cache: "no-store" });
+        const entries = await r.json();
+        for (let i = seen; i < entries.length; i++)
+          addLine(entries[i].role, entries[i].text);
+        seen = entries.length;
+      } catch (e) { /* server gone: hold what we have */ }
+    }, 700);
+  }
+
   /* ------------------------------ shot harness ----------------------------- */
   // Runs the face's frame() deterministically (a synchronous burst of t ms).
   // A headless browser resizes the window and finishes loading images AFTER
@@ -290,6 +387,8 @@ const AV = (() => {
     A._mic = !!opts.mic;
     if (A._mic && !DEMO) micStart();
     if (opts.sound !== false) soundInit(); else A._sndWant = false;
+    chatInit();
+    cursorInit();
     if (DEMO) {
       applyConfig({ name: Q.get("name") || "JARVIS" });
     } else {
