@@ -308,6 +308,7 @@ const AV = (() => {
       #av-chat-log .av-line{margin:3px 0;white-space:pre-wrap;word-break:break-word}
       #av-chat-log .av-user{color:#8fc4a8}
       #av-chat-log .av-assistant{color:#e8f0f2}
+      #av-chat-log .av-thinking{color:#7c8c84;font-style:italic;opacity:.85}
       #av-chat-input{resize:none;background:rgba(2,10,7,.6);
         border:1px solid rgba(140,220,180,.25);border-radius:8px;color:#e8f0f2;
         padding:8px 10px;font:inherit;outline:none;max-height:30vh;overflow-y:auto}
