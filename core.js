@@ -296,22 +296,38 @@ const AV = (() => {
     document.body.appendChild(wrap);
     const style = document.createElement("style");
     style.textContent = `
-      #av-chat{position:fixed;left:56px;top:118px;
-        width:425px;max-width:40vw;
-        z-index:60;font:13px/1.45 "SF Mono",Menlo,Consolas,monospace;
+      #av-chat{position:fixed;left:50%;transform:translateX(-50%);
+        top:118px;bottom:64px;
+        width:820px;max-width:78vw;
+        z-index:60;font:18px/1.45 "SF Mono",Menlo,Consolas,monospace;
         display:flex;flex-direction:column;gap:6px}
       #av-chat, #av-chat *{cursor:auto}
-      #av-chat-log{cursor:text;max-height:62vh;overflow-y:auto;
-        background:rgba(2,10,7,.6);border:1px solid rgba(140,220,180,.18);
+      /* flex-fill + min-height:0 so the log absorbs leftover space and
+         scrolls internally; the container's own top/bottom anchors keep
+         the input on screen (was max-height:62vh, which let the input
+         grow off the bottom behind the taskbar). */
+      #av-chat-log{cursor:text;flex:1 1 auto;min-height:0;overflow-y:auto;
+        background:rgba(2,10,7,.4);border:1px solid rgba(140,220,180,.18);
         border-radius:8px;padding:8px 10px}
       #av-chat-log:empty{display:none}
       #av-chat-log .av-line{margin:3px 0;white-space:pre-wrap;word-break:break-word}
       #av-chat-log .av-user{color:#8fc4a8}
       #av-chat-log .av-assistant{color:#e8f0f2}
-      #av-chat-log .av-thinking{color:#7c8c84;font-style:italic;opacity:.85}
-      #av-chat-input{resize:none;background:rgba(2,10,7,.6);
+      #av-chat-log .av-thinking{color:#8a9a95;font-style:italic;font-size:17px;
+        margin:5px 0 5px 14px;padding:3px 0 3px 10px;
+        border-left:2px solid rgba(140,220,180,.28);opacity:.85}
+      #av-chat-log .av-thinking .av-think-label{display:block;font-style:normal;
+        font-size:13px;letter-spacing:.12em;text-transform:uppercase;
+        color:rgba(140,220,180,.55);margin-bottom:2px}
+      #av-chat-log .av-tool{color:#7fb0c8;font-size:16px;opacity:.92;
+        margin:2px 0 2px 14px}
+      #av-chat-log .av-tool::before{content:"\\25B8  ";color:rgba(127,176,200,.6)}
+      #av-chat-log .av-tool-result{color:#6f8a94;font-size:15px;opacity:.72;
+        margin:1px 0 4px 28px}
+      #av-chat-log .av-tool-result::before{content:"\\2192  ";opacity:.6}
+      #av-chat-input{resize:none;flex:0 0 auto;background:rgba(2,10,7,.4);
         border:1px solid rgba(140,220,180,.25);border-radius:8px;color:#e8f0f2;
-        padding:8px 10px;font:inherit;outline:none;max-height:30vh;overflow-y:auto}
+        padding:8px 10px;font:inherit;outline:none;max-height:40vh;overflow-y:auto}
       #av-chat-input:focus{border-color:rgba(140,220,180,.6)}
     `;
     document.head.appendChild(style);
@@ -322,14 +338,25 @@ const AV = (() => {
     function addLine(role, text) {
       const d = document.createElement("div");
       d.className = "av-line av-" + role;
-      d.textContent = (role === "user" ? "> " : "") + text;
+      if (role === "thinking") {
+        // its own indented block with a label, so reasoning reads
+        // distinctly from the conversation (like the desktop app's
+        // verbose thinking pane) instead of blending in.
+        const label = document.createElement("span");
+        label.className = "av-think-label";
+        label.textContent = "thinking";
+        d.appendChild(label);
+        d.appendChild(document.createTextNode(text));
+      } else {
+        d.textContent = (role === "user" ? "> " : "") + text;
+      }
       log.appendChild(d);
       log.scrollTop = log.scrollHeight;
     }
 
     function autosize() {
       input.style.height = "auto";
-      input.style.height = Math.min(input.scrollHeight, innerHeight * .3) + "px";
+      input.style.height = Math.min(input.scrollHeight, innerHeight * .4) + "px";
     }
     input.addEventListener("input", autosize);
 
