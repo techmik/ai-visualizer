@@ -83,6 +83,7 @@ const AV = (() => {
     A.badge = String(cfg.badge || "");
     if (cfg.thinking_sound === false) A._sndWant = false;
     A.faces = cfg.faces || [];
+    A.agent = cfg.agent || {};
     A._ready = true;
     A._readyCbs.forEach(cb => cb(A));
     A._readyCbs = [];
@@ -292,48 +293,80 @@ const AV = (() => {
     wrap.innerHTML =
       '<div id="av-chat-log"></div>' +
       '<textarea id="av-chat-input" rows="1" ' +
-      'placeholder="Type a message... Enter to send, Shift+Enter for a new line"></textarea>';
+      'placeholder="Type a message... Enter to send, Shift+Enter for a new line"></textarea>' +
+      '<div id="av-chat-status">' +
+      '<span id="av-chat-mode"></span><span id="av-chat-model"></span></div>';
     document.body.appendChild(wrap);
     const style = document.createElement("style");
+    // Styled to sit like the Claude Code desktop app's centre panel + bottom
+    // bar: an opaque card over the face, sans-serif prose, mono only for the
+    // tool/▸ lines, a model/mode status row under the input. Bottom-anchored
+    // and grows upward (was top+bottom anchored) so an empty chat collapses
+    // to just the input instead of a full-height slab, while the input still
+    // stays above the board face's taskbar/echo line.
     style.textContent = `
       #av-chat{position:fixed;left:50%;transform:translateX(-50%);
-        top:118px;bottom:64px;
-        width:820px;max-width:78vw;
-        z-index:60;font:18px/1.45 "SF Mono",Menlo,Consolas,monospace;
-        display:flex;flex-direction:column;gap:6px}
+        bottom:72px;width:960px;max-width:86vw;
+        max-height:calc(100vh - 200px);z-index:60;
+        font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+        color:#e6e4de;display:flex;flex-direction:column;
+        background:#232220;border:1px solid rgba(255,255,255,.10);
+        border-radius:12px;padding:14px 14px 12px;
+        box-shadow:0 12px 40px rgba(0,0,0,.45)}
       #av-chat, #av-chat *{cursor:auto}
-      /* flex-fill + min-height:0 so the log absorbs leftover space and
-         scrolls internally; the container's own top/bottom anchors keep
-         the input on screen (was max-height:62vh, which let the input
-         grow off the bottom behind the taskbar). */
       #av-chat-log{cursor:text;flex:1 1 auto;min-height:0;overflow-y:auto;
-        background:rgba(2,10,7,.4);border:1px solid rgba(140,220,180,.18);
-        border-radius:8px;padding:8px 10px}
+        display:flex;flex-direction:column;padding-right:6px;
+        scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}
+      #av-chat-log::-webkit-scrollbar{width:9px}
+      #av-chat-log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:5px}
+      #av-chat-log::-webkit-scrollbar-track{background:transparent}
       #av-chat-log:empty{display:none}
-      #av-chat-log .av-line{margin:3px 0;white-space:pre-wrap;word-break:break-word}
-      #av-chat-log .av-user{color:#8fc4a8}
-      #av-chat-log .av-assistant{color:#e8f0f2}
-      #av-chat-log .av-thinking{color:#8a9a95;font-style:italic;font-size:17px;
-        margin:5px 0 5px 14px;padding:3px 0 3px 10px;
-        border-left:2px solid rgba(140,220,180,.28);opacity:.85}
+      #av-chat-log .av-line{margin:6px 0;white-space:pre-wrap;word-break:break-word}
+      #av-chat-log .av-user{align-self:flex-end;max-width:85%;
+        background:rgba(255,255,255,.06);border-radius:12px;
+        padding:7px 12px;color:#e6e4de}
+      #av-chat-log .av-assistant{color:#e6e4de}
+      #av-chat-log .av-thinking{color:#9b958b;font-style:italic;
+        margin:6px 0 6px 4px;padding:2px 0 2px 12px;
+        border-left:2px solid rgba(255,255,255,.12)}
       #av-chat-log .av-thinking .av-think-label{display:block;font-style:normal;
-        font-size:13px;letter-spacing:.12em;text-transform:uppercase;
-        color:rgba(140,220,180,.55);margin-bottom:2px}
-      #av-chat-log .av-tool{color:#7fb0c8;font-size:16px;opacity:.92;
-        margin:2px 0 2px 14px}
-      #av-chat-log .av-tool::before{content:"\\25B8  ";color:rgba(127,176,200,.6)}
-      #av-chat-log .av-tool-result{color:#6f8a94;font-size:15px;opacity:.72;
-        margin:1px 0 4px 28px}
+        font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+        color:rgba(255,255,255,.35);margin-bottom:2px}
+      #av-chat-log .av-tool{color:#b8c4c8;font-size:13px;
+        font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+        margin:2px 0 2px 4px}
+      #av-chat-log .av-tool::before{content:"\\25B8  ";color:rgba(140,220,180,.5)}
+      #av-chat-log .av-tool-result{color:#8b857b;font-size:13px;
+        font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+        margin:1px 0 4px 18px}
       #av-chat-log .av-tool-result::before{content:"\\2192  ";opacity:.6}
-      #av-chat-input{resize:none;flex:0 0 auto;background:rgba(2,10,7,.4);
-        border:1px solid rgba(140,220,180,.25);border-radius:8px;color:#e8f0f2;
-        padding:8px 10px;font:inherit;outline:none;max-height:40vh;overflow-y:auto}
-      #av-chat-input:focus{border-color:rgba(140,220,180,.6)}
+      #av-chat-input{resize:none;flex:0 0 auto;background:rgba(255,255,255,.04);
+        border:1px solid rgba(255,255,255,.12);border-radius:10px;color:#e6e4de;
+        padding:9px 12px;margin-top:10px;font:inherit;outline:none;
+        max-height:40vh;overflow-y:auto}
+      #av-chat-input::placeholder{color:#7d776d}
+      #av-chat-input:focus{border-color:rgba(140,220,180,.5)}
+      #av-chat-status{flex:0 0 auto;display:flex;justify-content:space-between;
+        font-size:12px;color:#9b958b;margin-top:7px;padding:0 2px}
     `;
     document.head.appendChild(style);
 
     const log = wrap.querySelector("#av-chat-log");
     const input = wrap.querySelector("#av-chat-input");
+    const modeEl = wrap.querySelector("#av-chat-mode");
+    const modelEl = wrap.querySelector("#av-chat-model");
+
+    // model/effort/mode from server.py's /config (which reads backtalk.json),
+    // shown like the desktop app's "Manual · Sonnet 5 · High" indicator.
+    const titleCase = s => String(s || "").replace(/\b\w/g, c => c.toUpperCase());
+    const prettyModel = m => String(m || "").replace(/^claude-/, "").split("-")
+      .map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(" ").trim();
+    A.ready(a => {
+      const ag = a.agent || {};
+      modeEl.textContent = titleCase(ag.mode);
+      const m = prettyModel(ag.model), e = titleCase(ag.effort);
+      modelEl.textContent = m && e ? m + " · " + e : (m || e);
+    });
 
     function addLine(role, text) {
       const d = document.createElement("div");
@@ -348,7 +381,7 @@ const AV = (() => {
         d.appendChild(label);
         d.appendChild(document.createTextNode(text));
       } else {
-        d.textContent = (role === "user" ? "> " : "") + text;
+        d.textContent = text;
       }
       log.appendChild(d);
       log.scrollTop = log.scrollHeight;

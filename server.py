@@ -196,6 +196,31 @@ def read_transcript():
     return out
 
 
+def read_agent_meta():
+    """Best-effort read of the voice line's own config (backtalk.json), which
+    lives beside the bus, so a face can show which model/effort/mode is
+    driving it -- the same info the Claude Code desktop app shows under its
+    input. Missing or unreadable -> the documented backtalk defaults.
+
+    Reflects startup config only: backtalk's runtime /model and /effort
+    slash commands change the live values without writing anything to disk.
+    The desktop app's indicator behaves the same way in practice.
+    """
+    cfg = {}
+    try:
+        cfg = json.loads((BUS / "backtalk.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return {
+        "model": cfg.get("model") or "claude-sonnet-5",
+        "effort": cfg.get("effort") or "",
+        "mode": cfg.get("permission_mode") or "ask",
+        "name": cfg.get("name") or CFG["name"],
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -207,7 +232,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"name": CFG["name"], "badge": CFG["badge"],
                        "face": CFG["face"],
                        "thinking_sound": bool(CFG["thinking_sound"]),
-                       "faces": list_faces()}
+                       "faces": list_faces(),
+                       "agent": read_agent_meta()}
                 self._send(json.dumps(out).encode(), "application/json")
             elif path == "/transcript":
                 self._send(json.dumps(read_transcript()).encode(),
