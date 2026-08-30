@@ -323,20 +323,20 @@ const AV = (() => {
       #av-chat-log:empty{display:none}
       #av-chat-log .av-line{margin:6px 0;white-space:pre-wrap;word-break:break-word}
       #av-chat-log .av-user{align-self:flex-end;max-width:85%;
-        background:rgba(255,255,255,.06);border-radius:12px;
-        padding:7px 12px;color:#e6e4de}
+        background:rgba(93,214,150,.12);border:1px solid rgba(93,214,150,.22);
+        border-radius:12px;padding:7px 12px;color:#e6f2ea}
       #av-chat-log .av-assistant{color:#e6e4de}
       #av-chat-log .av-thinking{color:#9b958b;font-style:italic;
         margin:6px 0 6px 4px;padding:2px 0 2px 12px;
-        border-left:2px solid rgba(255,255,255,.12)}
+        border-left:2px solid rgba(140,220,180,.20)}
       #av-chat-log .av-thinking .av-think-label{display:block;font-style:normal;
         font-size:11px;letter-spacing:.12em;text-transform:uppercase;
-        color:rgba(255,255,255,.35);margin-bottom:2px}
-      #av-chat-log .av-tool{color:#b8c4c8;font-size:13px;
+        color:rgba(140,220,180,.45);margin-bottom:2px}
+      #av-chat-log .av-tool{color:#86d9b8;font-size:13px;
         font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
         margin:2px 0 2px 4px}
-      #av-chat-log .av-tool::before{content:"\\25B8  ";color:rgba(140,220,180,.5)}
-      #av-chat-log .av-tool-result{color:#8b857b;font-size:13px;
+      #av-chat-log .av-tool::before{content:"\\25B8  ";color:rgba(134,217,184,.75)}
+      #av-chat-log .av-tool-result{color:#8ba79a;font-size:13px;
         font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
         margin:1px 0 4px 18px}
       #av-chat-log .av-tool-result::before{content:"\\2192  ";opacity:.6}
