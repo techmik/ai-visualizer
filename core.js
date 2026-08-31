@@ -299,8 +299,11 @@ const AV = (() => {
     document.body.appendChild(wrap);
     const style = document.createElement("style");
     // Styled to sit like the Claude Code desktop app's centre panel + bottom
-    // bar: an opaque card over the face, sans-serif prose, mono only for the
-    // tool/▸ lines, a model/mode status row under the input. Bottom-anchored
+    // bar: a translucent frosted card over the face (backdrop-blur so the face
+    // animates through it and no 2nd window is needed), sans-serif prose, mono
+    // only for the tool/▸ lines, a model/mode status row under the input.
+    // Log lines carry a text-shadow so they stay legible over bright frames.
+    // Bottom-anchored
     // and grows upward (was top+bottom anchored) so an empty chat collapses
     // to just the input instead of a full-height slab, while the input still
     // stays above the board face's taskbar/echo line.
@@ -310,9 +313,12 @@ const AV = (() => {
         max-height:calc(100vh - 200px);z-index:60;
         font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
         color:#e6e4de;display:flex;flex-direction:column;
-        background:#232220;border:1px solid rgba(255,255,255,.10);
+        background:rgba(16,17,16,0.5);
+        backdrop-filter:blur(10px) saturate(1.1);
+        -webkit-backdrop-filter:blur(10px) saturate(1.1);
+        border:1px solid rgba(255,255,255,.10);
         border-radius:12px;padding:14px 14px 12px;
-        box-shadow:0 12px 40px rgba(0,0,0,.45)}
+        box-shadow:0 12px 40px rgba(0,0,0,.35)}
       #av-chat, #av-chat *{cursor:auto}
       #av-chat-log{cursor:text;flex:1 1 auto;min-height:0;overflow-y:auto;
         display:flex;flex-direction:column;padding-right:6px;
@@ -321,7 +327,8 @@ const AV = (() => {
       #av-chat-log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:5px}
       #av-chat-log::-webkit-scrollbar-track{background:transparent}
       #av-chat-log:empty{display:none}
-      #av-chat-log .av-line{margin:6px 0;white-space:pre-wrap;word-break:break-word}
+      #av-chat-log .av-line{margin:6px 0;white-space:pre-wrap;word-break:break-word;
+        text-shadow:0 1px 3px rgba(0,0,0,.55)}
       #av-chat-log .av-user{align-self:flex-end;max-width:85%;
         background:rgba(93,214,150,.12);border:1px solid rgba(93,214,150,.22);
         border-radius:12px;padding:7px 12px;color:#e6f2ea}
@@ -350,6 +357,18 @@ const AV = (() => {
         font-size:12px;color:#9b958b;margin-top:7px;padding:0 2px}
     `;
     document.head.appendChild(style);
+
+    // See the clean face without the chat box: open with ?nochat, or toggle it
+    // any time with Ctrl+` (a combo on purpose -- a bare key would fire while
+    // you're typing in the input).
+    if (Q.has("nochat")) wrap.style.display = "none";
+    addEventListener("keydown", e => {
+      if (e.ctrlKey && !e.altKey && !e.metaKey &&
+          (e.code === "Backquote" || e.key === "`")) {
+        e.preventDefault();
+        wrap.style.display = wrap.style.display === "none" ? "" : "none";
+      }
+    });
 
     const log = wrap.querySelector("#av-chat-log");
     const input = wrap.querySelector("#av-chat-input");
