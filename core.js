@@ -24,7 +24,8 @@
    It includes this script, calls AV.init(opts), then reads these
    fields every animation frame after calling AV.tick(dtMs):
 
-     AV.state      "idle" | "listening" | "thinking" | "speaking"
+     AV.state      "idle" | "listening" | "thinking" | "working" | "speaking"
+                   ("working" = a tool is running; "thinking" = model reasoning)
      AV.level      0..1 raw voice loudness (speaking only)
      AV.env        0..1 smoothed speech envelope (attack/release eased,
                    adaptively normalized — use this for motion)
@@ -106,7 +107,7 @@ const AV = (() => {
   /* ------------------------------ demo driver ------------------------------ */
   // A scripted voice turn: the face performs everything with no voice line.
   const SCRIPT = [["idle", 6000], ["listening", 3500], ["thinking", 4200],
-                  ["speaking", 8500]];
+                  ["working", 3800], ["thinking", 2400], ["speaking", 8500]];
   let demoT = 0, demoClock = 0;
   const PIN = SHOT || Q.get("state");   // ?state=speaking pins the demo
   function demoUpdate(dt) {

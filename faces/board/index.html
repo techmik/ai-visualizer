@@ -55,6 +55,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   #statusblock{position:absolute;top:34px;right:56px;text-align:right}
   #statemode{font-size:clamp(13px,.95vw,19px);letter-spacing:.5em;color:var(--ink)}
   #statemode .spin{display:inline-block;width:.85em;height:.85em;border:1px solid var(--dim);border-top-color:var(--ink);border-radius:50%;vertical-align:-8%;margin-left:.55em;animation:rot 1.1s linear infinite}
+  /* working = a tool is actually running: hot-amber label, and the whole
+     board takes a warm cast so it reads at a glance as "doing", not "idle" */
+  #statemode.working{color:var(--gold);text-shadow:0 0 14px rgba(231,195,104,.55)}
+  #statemode.working .spin{border-color:var(--gold-dim);border-top-color:var(--gold)}
+  canvas#stage{transition:filter .5s}
+  canvas#stage.working{filter:saturate(.7) sepia(.32) hue-rotate(-12deg) brightness(1.04)}
   @keyframes rot{to{transform:rotate(360deg)}}
   #clock{margin-top:8px;font-size:clamp(11px,.8vw,16px);letter-spacing:.3em;color:#8fe8b8;text-shadow:0 0 10px rgba(90,240,160,.4)}
   #usage{margin-top:9px;font-size:clamp(8px,.6vw,12px);letter-spacing:.22em;color:var(--dim);line-height:1.6}
@@ -162,7 +168,7 @@ let echoT=-1;                       // demo flavor: typed command while thinking
 
 function targetEnergy(){
   const s=AV.state, lvl=AV.level;
-  if(s==="thinking")return 1;
+  if(s==="thinking"||s==="working")return 1;
   if(s==="speaking")return Math.min(.97,.5+.5*Math.pow(lvl,.7));
   if(s==="listening")return .5;
   return .25;
@@ -187,8 +193,11 @@ function syncUsage(){
 function syncHUD(){
   const mode=$("statemode"),hint=$("hint");
   const s=AV.state;
-  if(s==="thinking"){
-    mode.innerHTML='THINKING<span class="spin"></span>';
+  const busy=(s==="thinking"||s==="working");
+  mode.classList.toggle("working",s==="working");
+  $("stage").classList.toggle("working",s==="working");
+  if(busy){
+    mode.innerHTML=(s==="working"?"WORKING":"THINKING")+'<span class="spin"></span>';
     hint.querySelector(".proc").style.display="inline";hint.querySelector(".idlehint").style.display="none";
   }else{
     mode.textContent=s==="speaking"?"SPEAKING":s==="listening"?"LISTENING":"IDLE";

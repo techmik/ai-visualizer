@@ -74,7 +74,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-STATES = {"idle", "listening", "thinking", "speaking"}
+STATES = {"idle", "listening", "thinking", "working", "speaking"}
 WAVEFORM_STALE_S = 0.6
 
 DEFAULTS = {
