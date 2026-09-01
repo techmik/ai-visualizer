@@ -1,9 +1,10 @@
 .DS_Store
 __pycache__/
 *.pyc
-.voice_state
-.voice_waveform
-.voice_loading_pid
-.voice_alert
+# the signal bus, written at runtime when bus_dir points here — a GLOB, not a
+# list. backtalk learned this the hard way: an enumerated list goes stale the
+# day the bus grows a file (.voice_context, .voice_rate_limits, .voice_transcript
+# .jsonl, .voice_inbox/ … were all missing here). See backtalk/.gitignore.
+.voice_*
 # your personal config, created at setup: never tracked, never touched by updates
 ai-visualizer.json

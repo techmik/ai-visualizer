@@ -25,8 +25,10 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
             "level":  0.0-1.0,       voice loudness while speaking
             "samples": [64 floats],  raw waveform snapshot (0s when quiet)
             "alert":  bool,          optional attention signal
-            "loading": bool}         true while the voice line plays its
+            "loading": bool,         true while the voice line plays its
                                      own thinking sound (we stay quiet)
+            "context": {used,max,pct}}  context-window fill, after each turn
+                                     (empty until the first turn publishes)
   /config  the merged ai-visualizer.json plus the list of installed
            faces, discovered by scanning the faces/ folder. Drop a new
            folder with an index.html into faces/ and it appears in the
@@ -46,6 +48,7 @@ line (backtalk writes it natively, github.com/jaredrhod/backtalk):
   .voice_waveform     JSON {ts, samples: [64 floats]} while audio plays
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed
+  .voice_context      optional: JSON {used, max, pct} context-window fill
   .voice_transcript.jsonl  one JSON object per line, {ts, role, text}
 
 Where the bus lives comes from "bus_dir" in ai-visualizer.json (default:
@@ -147,12 +150,13 @@ def mock_bus():
         ]
     return {"state": MOCK, "level": level, "samples": samples,
             "alert": False, "loading": MOCK == "thinking",
-            # Faked so the usage readout can be looked at without
-            # spending a real session to make it appear.
+            # Faked so the usage + context readouts can be looked at
+            # without spending a real session to make them appear.
             "rate_limits": {
                 "five_hour": {"utilization": 0.34, "resets_at": t + 9200},
                 "seven_day": {"utilization": 0.61, "resets_at": t + 288000},
-            }}
+            },
+            "context": {"used": 47000, "max": 200000, "pct": 23.5}}
 
 
 def read_bus():
@@ -191,8 +195,16 @@ def read_bus():
         rate_limits = json.loads((BUS / ".voice_rate_limits").read_text())
     except (OSError, ValueError):
         pass
+    # Context-window fill, published after every turn. Always on (it is
+    # not account spend), empty until the first turn writes it.
+    context = {}
+    try:
+        context = json.loads((BUS / ".voice_context").read_text())
+    except (OSError, ValueError):
+        pass
     return {"state": state, "level": level, "samples": samples,
-            "alert": alert, "loading": loading, "rate_limits": rate_limits}
+            "alert": alert, "loading": loading, "rate_limits": rate_limits,
+            "context": context}
 
 
 def read_transcript():

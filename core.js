@@ -153,6 +153,9 @@ const AV = (() => {
     // Empty unless the voice line was told to publish usage. A face that
     // wants to draw it reads AV.rateLimits; every other face ignores it.
     A.rateLimits = raw.rate_limits || {};
+    // Context-window fill {used, max, pct}, published after each turn.
+    // The chat status row draws it; other faces ignore it.
+    A.context = raw.context || {};
     A.level = raw.level || 0;
 
     // adaptive envelope: normalize against a decaying peak, then ease
@@ -299,7 +302,10 @@ const AV = (() => {
       '<textarea id="av-chat-input" rows="1" ' +
       'placeholder="Type a message... Enter to send, Shift+Enter for a new line"></textarea>' +
       '<div id="av-chat-status">' +
-      '<span id="av-chat-mode"></span><span id="av-chat-model"></span></div>';
+      '<span id="av-chat-mode"></span>' +
+      '<span id="av-chat-meta">' +
+      '<span id="av-chat-ctx"></span><span id="av-chat-model"></span>' +
+      '</span></div>';
     document.body.appendChild(wrap);
     const style = document.createElement("style");
     // Styled to sit like the Claude Code desktop app's centre panel + bottom
@@ -358,7 +364,15 @@ const AV = (() => {
       #av-chat-input::placeholder{color:#7d776d}
       #av-chat-input:focus{border-color:rgba(140,220,180,.5)}
       #av-chat-status{flex:0 0 auto;display:flex;justify-content:space-between;
+        align-items:center;
         font-size:12px;color:#9b958b;margin-top:7px;padding:0 2px}
+      #av-chat-meta{display:flex;gap:12px;align-items:center}
+      #av-chat-ctx{color:#8b857b;display:flex;align-items:center;gap:6px}
+      #av-chat-ctx:empty{display:none}
+      #av-chat-ctx .av-ctx-bar{width:44px;height:4px;border-radius:2px;
+        background:rgba(255,255,255,.12);overflow:hidden}
+      #av-chat-ctx .av-ctx-fill{display:block;height:100%;
+        background:rgba(140,220,180,.55)}
     `;
     document.head.appendChild(style);
 
@@ -378,6 +392,7 @@ const AV = (() => {
     const input = wrap.querySelector("#av-chat-input");
     const modeEl = wrap.querySelector("#av-chat-mode");
     const modelEl = wrap.querySelector("#av-chat-model");
+    const ctxEl = wrap.querySelector("#av-chat-ctx");
 
     // model/effort/mode from server.py's /config (which reads backtalk.json),
     // shown like the desktop app's "Manual · Sonnet 5 · High" indicator.
@@ -448,6 +463,33 @@ const AV = (() => {
         }).catch(() => {});
       }
     });
+
+    // Context-window readout in the status row. A.context is refreshed
+    // every frame by tick() off the /state bus; this just formats it,
+    // like the desktop app's context ring. Nothing shows until the first
+    // turn publishes a number.
+    const kfmt = n => n >= 1e6 ? +(n / 1e6).toFixed(1) + "M"
+      : Math.round(n / 1000) + "k";
+    function paintCtx() {
+      const c = A.context || {};
+      if (!c.max) { ctxEl.textContent = ""; return; }
+      const pct = c.pct != null ? Math.round(c.pct)
+        : Math.round(100 * (c.used || 0) / c.max);
+      const col = pct >= 90 ? "#e0736e" : pct >= 70 ? "#e7c368"
+        : "rgba(140,220,180,.55)";
+      ctxEl.textContent = kfmt(c.used || 0) + " / " + kfmt(c.max)
+        + " · " + pct + "%";
+      const bar = document.createElement("span");
+      bar.className = "av-ctx-bar";
+      const fill = document.createElement("span");
+      fill.className = "av-ctx-fill";
+      fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      fill.style.background = col;
+      bar.appendChild(fill);
+      ctxEl.appendChild(bar);
+    }
+    paintCtx();
+    setInterval(paintCtx, 1000);
 
     let seen = 0;
     setInterval(async () => {
