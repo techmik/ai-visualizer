@@ -392,6 +392,20 @@ const AV = (() => {
     });
 
     function addLine(role, text) {
+      if (role === "thinking") {
+        // Reasoning now streams in as sentence-sized pieces (backtalk
+        // flushes thinking_delta live, not one lump at block end). Grow
+        // the current reasoning block instead of stacking a fresh
+        // labelled block per piece — unless the previous line was
+        // something else (a tool call, a spoken sentence), which starts
+        // a new one.
+        const last = log.lastElementChild;
+        if (last && last.classList.contains("av-thinking")) {
+          last.appendChild(document.createTextNode(" " + text));
+          log.scrollTop = log.scrollHeight;
+          return;
+        }
+      }
       const d = document.createElement("div");
       d.className = "av-line av-" + role;
       if (role === "thinking") {
