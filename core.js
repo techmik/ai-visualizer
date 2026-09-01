@@ -334,7 +334,7 @@ const AV = (() => {
         max-height:calc(100vh - 200px);z-index:60;
         font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
         color:#e6e4de;display:flex;flex-direction:column;
-        background:rgba(16,17,16,0.5);
+        background:rgba(16,17,16,0.72);
         backdrop-filter:blur(10px) saturate(1.1);
         -webkit-backdrop-filter:blur(10px) saturate(1.1);
         border:1px solid rgba(255,255,255,.10);
@@ -368,6 +368,15 @@ const AV = (() => {
         font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
         margin:1px 0 4px 18px}
       #av-chat-log .av-tool-result::before{content:"\\2192  ";opacity:.6}
+      #av-chat-log .av-code{margin:8px 0 8px 4px}
+      #av-chat-log .av-code-pre{margin:0;padding:10px 12px;overflow-x:auto;
+        background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.14);
+        border-radius:8px;white-space:pre;text-shadow:none;
+        font:12px/1.5 "SF Mono",ui-monospace,Menlo,Consolas,monospace;
+        color:#dfe6df}
+      #av-chat-log .av-code-pre::-webkit-scrollbar{height:8px}
+      #av-chat-log .av-code-pre::-webkit-scrollbar-thumb{
+        background:rgba(255,255,255,.18);border-radius:4px}
       #av-chat-inputrow{position:relative;flex:0 0 auto;margin-top:10px}
       #av-chat-input{resize:none;display:block;width:100%;box-sizing:border-box;
         background:rgba(255,255,255,.04);
@@ -565,6 +574,14 @@ const AV = (() => {
         label.textContent = "thinking";
         d.appendChild(label);
         d.appendChild(document.createTextNode(text));
+      } else if (role === "code") {
+        // backtalk diverts a fenced block here (display-only role) so
+        // the TTS never reads code aloud. Monospace, bordered,
+        // whitespace preserved, its own horizontal scroll.
+        const pre = document.createElement("pre");
+        pre.className = "av-code-pre";
+        pre.textContent = text;
+        d.appendChild(pre);
       } else {
         d.textContent = text;
       }
