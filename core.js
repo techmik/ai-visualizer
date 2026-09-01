@@ -299,8 +299,19 @@ const AV = (() => {
     wrap.id = "av-chat";
     wrap.innerHTML =
       '<div id="av-chat-log"></div>' +
+      '<div id="av-chat-files"></div>' +
+      '<div id="av-chat-inputrow">' +
+      '<button id="av-chat-attach" type="button" title="Attach a file" ' +
+      'aria-label="Attach a file">' +
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" ' +
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+      'stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49' +
+      'l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>' +
+      '</svg></button>' +
       '<textarea id="av-chat-input" rows="1" ' +
       'placeholder="Type a message... Enter to send, Shift+Enter for a new line"></textarea>' +
+      '</div>' +
+      '<input id="av-chat-file" type="file" multiple hidden>' +
       '<div id="av-chat-status">' +
       '<span id="av-chat-mode"></span>' +
       '<span id="av-chat-meta">' +
@@ -357,12 +368,36 @@ const AV = (() => {
         font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
         margin:1px 0 4px 18px}
       #av-chat-log .av-tool-result::before{content:"\\2192  ";opacity:.6}
-      #av-chat-input{resize:none;flex:0 0 auto;background:rgba(255,255,255,.04);
+      #av-chat-inputrow{position:relative;flex:0 0 auto;margin-top:10px}
+      #av-chat-input{resize:none;display:block;width:100%;box-sizing:border-box;
+        background:rgba(255,255,255,.04);
         border:1px solid rgba(255,255,255,.12);border-radius:10px;color:#e6e4de;
-        padding:9px 12px;margin-top:10px;font:inherit;outline:none;
+        padding:9px 12px 9px 42px;font:inherit;outline:none;
         max-height:40vh;overflow-y:auto}
       #av-chat-input::placeholder{color:#7d776d}
       #av-chat-input:focus{border-color:rgba(140,220,180,.5)}
+      #av-chat-attach{position:absolute;left:8px;bottom:8px;width:28px;height:28px;
+        display:flex;align-items:center;justify-content:center;padding:0;
+        background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
+        border-radius:8px;color:#bfe6d5;cursor:pointer}
+      #av-chat-attach:hover{background:rgba(140,220,180,.16);color:#e6f2ea;
+        border-color:rgba(140,220,180,.4)}
+      #av-chat-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+      #av-chat-files:empty{display:none}
+      #av-chat-files .av-file-chip{display:flex;align-items:center;gap:7px;
+        max-width:280px;font-size:12px;color:#e6f2ea;
+        background:rgba(93,214,150,.12);border:1px solid rgba(93,214,150,.22);
+        border-radius:8px;padding:3px 6px 3px 10px}
+      #av-chat-files .av-file-chip.av-file-err{color:#f0cfcd;
+        background:rgba(224,115,110,.14);border-color:rgba(224,115,110,.38)}
+      #av-chat-files .av-file-chip .av-file-name{white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis}
+      #av-chat-files .av-file-chip button{flex:0 0 auto;width:16px;height:16px;
+        display:flex;align-items:center;justify-content:center;padding:0;
+        border:none;background:none;color:inherit;cursor:pointer;
+        font-size:14px;line-height:1;border-radius:4px}
+      #av-chat-files .av-file-chip button:hover{background:rgba(255,255,255,.14)}
+      #av-chat.av-drag{outline:2px dashed rgba(140,220,180,.6);outline-offset:4px}
       #av-chat-status{flex:0 0 auto;display:flex;justify-content:space-between;
         align-items:center;
         font-size:12px;color:#9b958b;margin-top:7px;padding:0 2px}
@@ -393,6 +428,104 @@ const AV = (() => {
     const modeEl = wrap.querySelector("#av-chat-mode");
     const modelEl = wrap.querySelector("#av-chat-model");
     const ctxEl = wrap.querySelector("#av-chat-ctx");
+    const attachBtn = wrap.querySelector("#av-chat-attach");
+    const fileInput = wrap.querySelector("#av-chat-file");
+    const fileTray = wrap.querySelector("#av-chat-files");
+
+    // Files picked (or dropped) but not yet sent. Each POSTs to /attach
+    // right away; the server saves it beside the bus and returns an
+    // absolute path. On send, every finished upload's path is appended to
+    // the message as an "[Attached file: ...]" line so the agent can open
+    // it with no "where is it on my PC" round-trip. Entry shape:
+    //   {name, chip, nameEl, path|null, done, failed}
+    const attached = [];
+    const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
+    let sendQueued = false;
+
+    function dropEntry(entry) {
+      const i = attached.indexOf(entry);
+      if (i >= 0) attached.splice(i, 1);
+      if (entry.chip) entry.chip.remove();
+    }
+
+    function addChip(entry, label) {
+      const chip = document.createElement("div");
+      chip.className = "av-file-chip";
+      const nm = document.createElement("span");
+      nm.className = "av-file-name";
+      nm.textContent = label;
+      const x = document.createElement("button");
+      x.type = "button";
+      x.textContent = "×";
+      x.title = "Remove";
+      x.addEventListener("click", () => dropEntry(entry));
+      chip.appendChild(nm);
+      chip.appendChild(x);
+      fileTray.appendChild(chip);
+      entry.chip = chip;
+      entry.nameEl = nm;
+    }
+
+    function markErr(entry, msg) {
+      entry.done = true;
+      entry.failed = true;
+      if (entry.chip) {
+        entry.chip.classList.add("av-file-err");
+        entry.nameEl.textContent = entry.name + " — " + msg;
+      }
+    }
+
+    function uploadFile(file) {
+      const entry = { name: file.name, path: null, done: false, failed: false };
+      attached.push(entry);
+      addChip(entry, file.name + " — uploading…");
+      if (file.size > ATTACH_MAX_BYTES) {
+        markErr(entry, "too large (max 25 MB)");
+        return;
+      }
+      fetch("/attach", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Filename": encodeURIComponent(file.name),
+        },
+        body: file,
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (!res || !res.ok || !res.path)
+            throw new Error((res && res.error) || "upload failed");
+          entry.path = res.path;
+          entry.done = true;
+          entry.nameEl.textContent = entry.name;
+        })
+        .catch(err => markErr(entry, String(err.message || err)))
+        .finally(() => { if (sendQueued) trySend(); });
+    }
+
+    attachBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      for (const f of fileInput.files) uploadFile(f);
+      fileInput.value = "";
+    });
+
+    // Drag a file straight onto the chat card.
+    ["dragenter", "dragover"].forEach(ev => wrap.addEventListener(ev, e => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files")) {
+        e.preventDefault();
+        wrap.classList.add("av-drag");
+      }
+    }));
+    wrap.addEventListener("dragleave", e => {
+      if (!e.relatedTarget || !wrap.contains(e.relatedTarget))
+        wrap.classList.remove("av-drag");
+    });
+    wrap.addEventListener("drop", e => {
+      wrap.classList.remove("av-drag");
+      if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+      e.preventDefault();
+      for (const f of e.dataTransfer.files) uploadFile(f);
+    });
 
     // model/effort/mode from server.py's /config (which reads backtalk.json),
     // shown like the desktop app's "Manual · Sonnet 5 · High" indicator.
@@ -445,6 +578,33 @@ const AV = (() => {
     }
     input.addEventListener("input", autosize);
 
+    function trySend() {
+      const typed = input.value.trim();
+      // Drop failed uploads; they never got a path.
+      for (const e of attached.filter(a => a.failed)) dropEntry(e);
+      if (attached.some(a => !a.done)) {
+        // an upload is still in flight — fire the moment it settles
+        sendQueued = !!(typed || attached.length);
+        return;
+      }
+      sendQueued = false;
+      const ready = attached.filter(a => a.path);
+      if (!typed && !ready.length) return;
+      let text = typed;
+      if (ready.length)
+        text += (text ? "\n\n" : "") +
+          ready.map(a => "[Attached file: " + a.path + "]").join("\n");
+      input.value = "";
+      autosize();
+      attached.length = 0;
+      fileTray.textContent = "";
+      fetch("/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }).catch(() => {});
+    }
+
     // Stop every key here from reaching a face's own shortcuts (space,
     // c, f, ...) — faces bind those on window/document with no target
     // check, so without this, typing a message would also trigger them.
@@ -452,15 +612,7 @@ const AV = (() => {
       e.stopPropagation();
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        const text = input.value.trim();
-        if (!text) return;
-        input.value = "";
-        autosize();
-        fetch("/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        }).catch(() => {});
+        trySend();
       }
     });
 

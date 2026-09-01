@@ -40,6 +40,12 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
            message into .voice_inbox/ for backtalk's own poller to pick
            up and answer, same as typing in its terminal. The one WRITE
            this server does to the bus.
+  /attach  POST raw file bytes, original name in the X-Filename header
+           (percent-encoded). Saves the upload under .voice_attachments/
+           beside the bus and returns {"ok", "path", "name"} — the chat
+           box appends that absolute path to the outgoing message as an
+           [Attached file: ...] line so the agent can just open it.
+           Uploads older than 7 days are pruned whenever a new one lands.
 
 Otherwise READ-ONLY on the signal bus. The bus is written by a voice
 line (backtalk writes it natively, github.com/jaredrhod/backtalk):
@@ -67,10 +73,13 @@ Ctrl-C stops.
 import json
 import math
 import mimetypes
+import os
+import re
 import sys
 import threading
 import time
 import webbrowser
+import urllib.parse
 import urllib.request
 import errno
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -106,6 +115,14 @@ def load_config():
 
 CFG = load_config()
 BUS = Path(CFG["bus_dir"]).expanduser() if CFG.get("bus_dir") else HERE
+
+# Chat-box file attachments land here, next to the signal bus. Kept out of
+# the bus contract on purpose: backtalk never reads these, the agent does
+# (by the absolute path the chat box hands it). Pruned by age, not size.
+ATTACH_DIR = BUS / ".voice_attachments"
+ATTACH_MAX_BYTES = 25 * 1024 * 1024
+ATTACH_MAX_AGE_S = 7 * 86400
+_ATTACH_BAD = re.compile(r"[^A-Za-z0-9._ -]+")
 
 MOCK = None
 NO_OPEN = "--no-open" in sys.argv
@@ -249,6 +266,55 @@ def read_agent_meta():
     }
 
 
+def _safe_attach_name(raw):
+    """A filename from an untrusted header -> a bare, boring basename.
+    Strips any path, replaces anything outside [A-Za-z0-9._ -], never
+    empty, length-capped keeping the extension."""
+    base = os.path.basename((raw or "").replace("\\", "/")).strip()
+    base = _ATTACH_BAD.sub("_", base).strip("._ ")
+    if not base:
+        base = "file"
+    if len(base) > 120:
+        stem, dot, ext = base.rpartition(".")
+        base = stem[:110] + dot + ext[:9] if dot else base[:120]
+    return base
+
+
+def _prune_attachments():
+    """Delete uploads older than ATTACH_MAX_AGE_S. Best-effort, called
+    just before each new upload lands so the folder can't grow forever."""
+    now = time.time()
+    try:
+        entries = list(ATTACH_DIR.iterdir())
+    except OSError:
+        return
+    for p in entries:
+        try:
+            if p.is_file() and now - p.stat().st_mtime > ATTACH_MAX_AGE_S:
+                p.unlink()
+        except OSError:
+            pass
+
+
+def save_attachment(raw_name, data):
+    """Write one upload under ATTACH_DIR, return its absolute path (str).
+    Timestamp-prefixed so names never collide and the folder sorts by
+    arrival."""
+    ATTACH_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_attachments()
+    fname = _safe_attach_name(raw_name)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = ATTACH_DIR / f"{stamp}-{fname}"
+    n = 1
+    while target.exists():
+        target = ATTACH_DIR / f"{stamp}-{n}-{fname}"
+        n += 1
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+    return str(target)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -290,29 +356,53 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
         try:
-            if path != "/send":
+            if path == "/send":
+                self._do_send()
+            elif path == "/attach":
+                self._do_attach()
+            else:
                 self._send(b"not found", "text/plain", 404)
-                return
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length) or b"{}")
-            text = str(body.get("text", "")).strip()
-            if not text:
-                self._send(json.dumps({"error": "empty"}).encode(),
-                           "application/json", 400)
-                return
-            inbox = BUS / ".voice_inbox"
-            inbox.mkdir(exist_ok=True)
-            name = f"{time.time():.6f}-{threading.get_ident()}.msg"
-            tmp = inbox / (name + ".tmp")
-            tmp.write_text(text, encoding="utf-8")
-            tmp.replace(inbox / name)
-            self._send(json.dumps({"ok": True}).encode(),
-                       "application/json")
         except BrokenPipeError:
             pass
         except Exception as e:
             body = json.dumps({"error": str(e)}).encode()
             self._send(body, "application/json", 500)
+
+    def _do_send(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        text = str(body.get("text", "")).strip()
+        if not text:
+            self._send(json.dumps({"error": "empty"}).encode(),
+                       "application/json", 400)
+            return
+        inbox = BUS / ".voice_inbox"
+        inbox.mkdir(exist_ok=True)
+        name = f"{time.time():.6f}-{threading.get_ident()}.msg"
+        tmp = inbox / (name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(inbox / name)
+        self._send(json.dumps({"ok": True}).encode(), "application/json")
+
+    def _do_attach(self):
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0:
+            self._send(json.dumps({"error": "empty"}).encode(),
+                       "application/json", 400)
+            return
+        if length > ATTACH_MAX_BYTES:
+            # drain the socket so the client sees the status, not a reset
+            self.rfile.read(length)
+            self._send(json.dumps(
+                {"error": "file too large (max 25 MB)"}).encode(),
+                "application/json", 413)
+            return
+        raw_name = urllib.parse.unquote(self.headers.get("X-Filename", ""))
+        data = self.rfile.read(length)
+        dest = save_attachment(raw_name, data)
+        self._send(json.dumps(
+            {"ok": True, "path": dest, "name": os.path.basename(dest)}
+        ).encode(), "application/json")
 
     def _static(self, path):
         if path == "/":
