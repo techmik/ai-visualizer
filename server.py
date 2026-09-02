@@ -27,8 +27,12 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
             "alert":  bool,          optional attention signal
             "loading": bool,         true while the voice line plays its
                                      own thinking sound (we stay quiet)
-            "context": {used,max,pct}}  context-window fill, after each turn
+            "context": {used,max,pct},  context-window fill, after each turn
                                      (empty until the first turn publishes)
+            "permission": {id,tool,what,detail,phase}}  present only while
+                                     a permission ask waits; the chat box
+                                     draws an approve/deny card and answers
+                                     via /send ("yes"/"no"/"details")
   /config  the merged ai-visualizer.json plus the list of installed
            faces, discovered by scanning the faces/ folder. Drop a new
            folder with an index.html into faces/ and it appears in the
@@ -55,6 +59,8 @@ line (backtalk writes it natively, github.com/jaredrhod/backtalk):
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed
   .voice_context      optional: JSON {used, max, pct} context-window fill
+  .voice_permission   optional: JSON {ts,id,tool,what,detail,phase} — present
+                      only while a permission ask waits for an answer
   .voice_transcript.jsonl  one JSON object per line, {ts, role, text}
 
 Where the bus lives comes from "bus_dir" in ai-visualizer.json (default:
@@ -129,7 +135,7 @@ NO_OPEN = "--no-open" in sys.argv
 if "--mock" in sys.argv:
     i = sys.argv.index("--mock")
     MOCK = sys.argv[i + 1] if len(sys.argv) > i + 1 else "speaking"
-    if MOCK not in STATES:
+    if MOCK not in STATES and MOCK != "permission":
         MOCK = "speaking"
 PORT = int(CFG.get("port", 8790))
 if "--port" in sys.argv:
@@ -165,7 +171,14 @@ def mock_bus():
             * 9000.0 * (0.35 + 0.65 * abs(math.sin(t * 2.6)))
             for i in range(64)
         ]
-    return {"state": MOCK, "level": level, "samples": samples,
+    # ?mock=permission previews the approve/deny card with no voice line.
+    permission = {}
+    if MOCK == "permission":
+        permission = {"ts": t, "id": "mock", "tool": "Bash", "phase": "ask",
+                      "what": "run a git command in the terminal",
+                      "detail": "run a command: git push origin ibuy-custom"}
+    return {"state": "thinking" if MOCK == "permission" else MOCK,
+            "level": level, "samples": samples,
             "alert": False, "loading": MOCK == "thinking",
             # Faked so the usage + context readouts can be looked at
             # without spending a real session to make them appear.
@@ -173,7 +186,8 @@ def mock_bus():
                 "five_hour": {"utilization": 0.34, "resets_at": t + 9200},
                 "seven_day": {"utilization": 0.61, "resets_at": t + 288000},
             },
-            "context": {"used": 47000, "max": 200000, "pct": 23.5}}
+            "context": {"used": 47000, "max": 200000, "pct": 23.5},
+            "permission": permission}
 
 
 def read_bus():
@@ -219,9 +233,17 @@ def read_bus():
         context = json.loads((BUS / ".voice_context").read_text())
     except (OSError, ValueError):
         pass
+    # Present only while a permission ask is waiting for an answer; the
+    # voice line removes the file the instant it resolves. A face draws
+    # an approve/deny card off this and answers via /send ("yes"/"no").
+    permission = {}
+    try:
+        permission = json.loads((BUS / ".voice_permission").read_text())
+    except (OSError, ValueError):
+        pass
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
-            "context": context}
+            "context": context, "permission": permission}
 
 
 def read_transcript():

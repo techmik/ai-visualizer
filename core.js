@@ -156,6 +156,9 @@ const AV = (() => {
     // Context-window fill {used, max, pct}, published after each turn.
     // The chat status row draws it; other faces ignore it.
     A.context = raw.context || {};
+    // A permission ask waiting for an answer, or {} when none. The chat
+    // box draws an approve/deny card off this; other faces ignore it.
+    A.permission = raw.permission || {};
     A.level = raw.level || 0;
 
     // adaptive envelope: normalize against a decaying peak, then ease
@@ -300,6 +303,7 @@ const AV = (() => {
     wrap.innerHTML =
       '<div id="av-chat-log"></div>' +
       '<div id="av-chat-files"></div>' +
+      '<div id="av-chat-perm"></div>' +
       '<div id="av-chat-inputrow">' +
       '<button id="av-chat-attach" type="button" title="Attach a file" ' +
       'aria-label="Attach a file">' +
@@ -417,6 +421,26 @@ const AV = (() => {
         background:rgba(255,255,255,.12);overflow:hidden}
       #av-chat-ctx .av-ctx-fill{display:block;height:100%;
         background:rgba(140,220,180,.55)}
+      #av-chat-perm{flex:0 1 auto;margin-top:10px;display:none;
+        min-height:0;max-height:40vh;
+        border:1px solid rgba(231,195,104,.45);border-radius:10px;
+        background:rgba(231,195,104,.10);padding:10px 12px}
+      #av-chat-perm.av-perm-on{display:flex;flex-direction:column}
+      #av-chat-perm .av-perm-q{color:#f0e4c4;font-size:13.5px;
+        margin-bottom:8px;white-space:pre-wrap;word-break:break-word;
+        flex:1 1 auto;min-height:0;overflow-y:auto}
+      #av-chat-perm .av-perm-btns{flex:0 0 auto;display:flex;gap:8px}
+      #av-chat-perm .av-perm-btns button{flex:0 0 auto;padding:5px 14px;
+        font:inherit;font-size:13px;border-radius:8px;cursor:pointer;
+        background:rgba(255,255,255,.06);
+        border:1px solid rgba(255,255,255,.16);color:#e6e4de}
+      #av-chat-perm .av-perm-btns button:hover{background:rgba(255,255,255,.14)}
+      #av-chat-perm .av-perm-yes{background:rgba(140,220,180,.16);
+        border-color:rgba(140,220,180,.45);color:#e6f2ea}
+      #av-chat-perm .av-perm-yes:hover{background:rgba(140,220,180,.28)}
+      #av-chat-perm .av-perm-no{background:rgba(224,115,110,.14);
+        border-color:rgba(224,115,110,.4);color:#f0cfcd}
+      #av-chat-perm .av-perm-no:hover{background:rgba(224,115,110,.26)}
     `;
     document.head.appendChild(style);
 
@@ -440,6 +464,7 @@ const AV = (() => {
     const attachBtn = wrap.querySelector("#av-chat-attach");
     const fileInput = wrap.querySelector("#av-chat-file");
     const fileTray = wrap.querySelector("#av-chat-files");
+    const permEl = wrap.querySelector("#av-chat-perm");
 
     // Files picked (or dropped) but not yet sent. Each POSTs to /attach
     // right away; the server saves it beside the bus and returns an
@@ -670,6 +695,62 @@ const AV = (() => {
         seen = entries.length;
       } catch (e) { /* server gone: hold what we have */ }
     }, 700);
+
+    // Approve/deny card, like the desktop app's permission prompt. A.permission
+    // is refreshed every frame by tick() off /state; it holds the ask the
+    // voice line just spoke, or {} when none. The buttons answer through the
+    // same /send seam typing uses -- "yes"/"no"/"details" -- so voice, typing,
+    // and a click are one path. The card clears itself the instant the voice
+    // line removes .voice_permission (any answer resolves it).
+    let permShown = "";   // "<id>|<phase>" on screen now, "" = hidden
+    function hidePerm() {
+      permEl.textContent = "";
+      permEl.classList.remove("av-perm-on");
+      permShown = "";
+    }
+    function sendWord(text) {
+      fetch("/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }).catch(() => {});
+    }
+    function paintPerm() {
+      const p = A.permission || {};
+      const fresh = p.id && (!p.ts || Date.now() / 1000 - p.ts < 300);
+      if (!fresh) { if (permShown) hidePerm(); return; }
+      const key = p.id + "|" + (p.phase || "ask");
+      if (key === permShown) return;
+      permShown = key;
+      permEl.replaceChildren();
+      permEl.classList.add("av-perm-on");
+      if (wrap.style.display === "none") wrap.style.display = "";
+      const q = document.createElement("div");
+      q.className = "av-perm-q";
+      q.textContent = p.phase === "detail"
+        ? "Details — I want to " + (p.detail || p.what || "act") + "."
+        : "Claude wants to " + (p.what || "act") + ".";
+      const row = document.createElement("div");
+      row.className = "av-perm-btns";
+      const mk = (label, word, cls, keep) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        if (cls) b.className = cls;
+        b.addEventListener("click", () => {
+          sendWord(word);
+          if (!keep) hidePerm();
+        });
+        return b;
+      };
+      row.appendChild(mk("Yes", "yes", "av-perm-yes"));
+      row.appendChild(mk("No", "no", "av-perm-no"));
+      if (p.phase !== "detail")
+        row.appendChild(mk("Details", "details", "", true));
+      permEl.appendChild(q);
+      permEl.appendChild(row);
+    }
+    setInterval(paintPerm, 200);
   }
 
   /* ------------------------------ shot harness ----------------------------- */
