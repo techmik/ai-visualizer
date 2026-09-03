@@ -421,15 +421,14 @@ const AV = (() => {
         background:rgba(255,255,255,.12);overflow:hidden}
       #av-chat-ctx .av-ctx-fill{display:block;height:100%;
         background:rgba(140,220,180,.55)}
-      #av-chat-perm{flex:0 1 auto;margin-top:10px;display:none;
-        min-height:0;max-height:40vh;
+      #av-chat-perm{flex:0 0 auto;margin-top:10px;display:none;
         border:1px solid rgba(231,195,104,.45);border-radius:10px;
         background:rgba(231,195,104,.10);padding:10px 12px}
-      #av-chat-perm.av-perm-on{display:flex;flex-direction:column}
+      #av-chat-perm.av-perm-on{display:block}
       #av-chat-perm .av-perm-q{color:#f0e4c4;font-size:13.5px;
         margin-bottom:8px;white-space:pre-wrap;word-break:break-word;
-        flex:1 1 auto;min-height:0;overflow-y:auto}
-      #av-chat-perm .av-perm-btns{flex:0 0 auto;display:flex;gap:8px}
+        max-height:30vh;overflow-y:auto}
+      #av-chat-perm .av-perm-btns{display:flex;gap:8px}
       #av-chat-perm .av-perm-btns button{flex:0 0 auto;padding:5px 14px;
         font:inherit;font-size:13px;border-radius:8px;cursor:pointer;
         background:rgba(255,255,255,.06);
