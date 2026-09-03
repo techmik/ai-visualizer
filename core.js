@@ -344,6 +344,7 @@ const AV = (() => {
         border:1px solid rgba(255,255,255,.10);
         border-radius:12px;padding:14px 14px 12px;
         box-shadow:0 12px 40px rgba(0,0,0,.35)}
+      #av-chat.av-perm-active{max-height:calc(100vh - 96px)}
       #av-chat, #av-chat *{cursor:auto}
       #av-chat-log{cursor:text;flex:1 1 auto;min-height:0;overflow-y:auto;
         display:flex;flex-direction:column;padding-right:6px;
@@ -705,7 +706,9 @@ const AV = (() => {
     function hidePerm() {
       permEl.textContent = "";
       permEl.classList.remove("av-perm-on");
+      wrap.classList.remove("av-perm-active");
       permShown = "";
+      requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
     }
     function sendWord(text) {
       fetch("/send", {
@@ -723,12 +726,14 @@ const AV = (() => {
       permShown = key;
       permEl.replaceChildren();
       permEl.classList.add("av-perm-on");
+      wrap.classList.add("av-perm-active");
       if (wrap.style.display === "none") wrap.style.display = "";
       const q = document.createElement("div");
       q.className = "av-perm-q";
       q.textContent = p.phase === "detail"
         ? "Details — I want to " + (p.detail || p.what || "act") + "."
-        : "Claude wants to " + (p.what || "act") + ".";
+        : "Claude wants to " + (p.what || "act") + "."
+          + (p.detail ? "\n\n" + p.detail : "");
       const row = document.createElement("div");
       row.className = "av-perm-btns";
       const mk = (label, word, cls, keep) => {
@@ -748,6 +753,7 @@ const AV = (() => {
         row.appendChild(mk("Details", "details", "", true));
       permEl.appendChild(q);
       permEl.appendChild(row);
+      requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
     }
     setInterval(paintPerm, 200);
   }
