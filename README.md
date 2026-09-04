@@ -57,7 +57,7 @@ Point them at each other in either direction: set `bus_dir` in `ai-visualizer.js
 
 ## Type back
 
-Every face carries a small chat box in the corner (bottom right): a real textarea, so Shift+Enter makes a new line and pasting just works, unlike a terminal. Enter sends the message into backtalk's own conversation exactly like typing in its terminal window would, and the box shows the running transcript back — what you said (typed or spoken) and what the agent replied — polling `.voice_transcript.jsonl` on the same bus. Needs a backtalk new enough to poll `.voice_inbox/` (anything running `_inbox_reader` in `main.py`); older backtalk versions ignore the inbox and the box just won't get answers.
+Every face carries a chat box, bottom centre: a real textarea, so Shift+Enter makes a new line and pasting just works, unlike a terminal. Enter sends the message into backtalk's own conversation exactly like typing in its terminal window would, and the box shows the running transcript back — what you said (typed or spoken) and what the agent replied — polling `.voice_transcript.jsonl` on the same bus. Needs a backtalk new enough to poll `.voice_inbox/` (anything running `_inbox_reader` in `main.py`); older backtalk versions ignore the inbox and the box just won't get answers.
 
 ## The thinking sound
 

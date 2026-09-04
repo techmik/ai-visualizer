@@ -379,7 +379,9 @@ function drawAlertFrame(){
 function frame(dt){
   AV.tick(dt);
   now+=dt;
-  const state=AV.state;
+  // "working" (a tool running) wears the thinking treatment here until this
+  // face gets its own; before this alias it fell through to the IDLE profile
+  const state=AV.state==="working"?"thinking":AV.state;
   const tgt=state==="thinking"?1:0;
   thinkingAmt+=(tgt-thinkingAmt)*Math.min(1,dt/400);
   rain.update(dt,state,AV.alert,thinkingAmt,now);

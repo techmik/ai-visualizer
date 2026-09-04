@@ -512,7 +512,9 @@ function frame(dt){
 
   /* state-driven fades: speaking = both off (bars + halo own the motion),
      listening/thinking = working ornaments, idle = idle ornaments */
-  const st=AV.state;
+  // "working" (a tool running) wears the thinking treatment here until this
+  // face gets its own; before this alias it fell through to IDLE mid-turn
+  const st=AV.state==="working"?"thinking":AV.state;
   let idleT=0,workT=0;
   if(st==="speaking"){idleT=0;workT=0}
   else if(st==="listening"||st==="thinking"){idleT=0;workT=1}

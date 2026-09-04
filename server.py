@@ -54,7 +54,8 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
 Otherwise READ-ONLY on the signal bus. The bus is written by a voice
 line (backtalk writes it natively, github.com/jaredrhod/backtalk):
 
-  .voice_state        idle | listening | thinking | speaking
+  .voice_state        idle | listening | thinking | working | speaking
+                      ("working" = a tool is actually running)
   .voice_waveform     JSON {ts, samples: [64 floats]} while audio plays
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed

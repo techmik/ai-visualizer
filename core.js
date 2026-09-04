@@ -448,12 +448,13 @@ const AV = (() => {
     // any time with Ctrl+` (a combo on purpose -- a bare key would fire while
     // you're typing in the input).
     if (Q.has("nochat")) wrap.style.display = "none";
+    const isToggle = e => e.ctrlKey && !e.altKey && !e.metaKey &&
+      (e.code === "Backquote" || e.key === "`");
+    const toggleChat = () => {
+      wrap.style.display = wrap.style.display === "none" ? "" : "none";
+    };
     addEventListener("keydown", e => {
-      if (e.ctrlKey && !e.altKey && !e.metaKey &&
-          (e.code === "Backquote" || e.key === "`")) {
-        e.preventDefault();
-        wrap.style.display = wrap.style.display === "none" ? "" : "none";
-      }
+      if (isToggle(e)) { e.preventDefault(); toggleChat(); }
     });
 
     const log = wrap.querySelector("#av-chat-log");
@@ -651,6 +652,14 @@ const AV = (() => {
     // c, f, ...) — faces bind those on window/document with no target
     // check, so without this, typing a message would also trigger them.
     input.addEventListener("keydown", e => {
+      // the toggle combo must still work with the cursor in the box: the
+      // stopPropagation below (needed to shield face shortcuts) would
+      // otherwise keep it from ever reaching the window listener above
+      if (isToggle(e)) {
+        // stop it HERE too, or it bubbles to the window listener and
+        // toggles straight back (caught in the 2026-09-04 test rig)
+        e.stopPropagation(); e.preventDefault(); toggleChat(); return;
+      }
       e.stopPropagation();
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -690,6 +699,14 @@ const AV = (() => {
       try {
         const r = await fetch("/transcript", { cache: "no-store" });
         const entries = await r.json();
+        if (entries.length < seen) {
+          // backtalk truncates the transcript at every launch; a face left
+          // open across a restart otherwise never shows the new session's
+          // first `seen` lines, and shows nothing at all until the new
+          // transcript outgrows the old one
+          log.replaceChildren();
+          seen = 0;
+        }
         for (let i = seen; i < entries.length; i++)
           addLine(entries[i].role, entries[i].text);
         seen = entries.length;

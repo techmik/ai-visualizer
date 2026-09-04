@@ -243,7 +243,9 @@ function splat(xi,yi,r,g,b,f){
 function frame(dt){
   AV.tick(dt);
   now+=dt;
-  const state=AV.state, env=AV.env, alert=AV.alert;
+  // "working" (a tool running) wears the thinking treatment here until this
+  // face gets its own; before this alias it fell through to the IDLE profile
+  const state=AV.state==="working"?"thinking":AV.state, env=AV.env, alert=AV.alert;
   const t=now/1000, dts=dt/1000;
   const lt=state==="listening"?AV.micLevel:0;
   listenAmt+=(lt-listenAmt)*Math.min(1,dt/120);
