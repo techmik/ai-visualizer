@@ -375,16 +375,59 @@ class Handler(BaseHTTPRequestHandler):
                 # left to tell; saying so twice helps no one.
                 pass
 
+    # Both POST routes WRITE beside the bus (an inbox message backtalk will
+    # treat as typed input, or an uploaded file), so they must refuse what a
+    # browser can be tricked into sending from another site. Three checks:
+    #   Host    -- must be this server. A DNS-rebinding page arrives with the
+    #              attacker's hostname here and is refused before CORS matters.
+    #   Origin  -- absent (same-origin fetch, curl) or exactly this server.
+    #              Any other site's page names itself and is refused.
+    #   Content-Type -- exactly what core.js sends. A cross-site form or a
+    #              no-preflight fetch can only carry text/plain or
+    #              form-encoded bodies, which never match.
+    # Verified 2026-09-04 before this guard existed: a POST to /send with
+    # Content-Type: text/plain and Origin: https://evil.example answered
+    # 200 and wrote a real inbox message -- i.e. a web page could type into
+    # the voice session, including "yes" to a pending permission ask.
+    def _local_post_ok(self, want_ctype):
+        me = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+        if self.headers.get("Host", "") not in me:
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in {f"http://{h}" for h in me}:
+            return False
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0]
+        return ctype.strip().lower() == want_ctype
+
+    def _refuse(self):
+        # drain the body first so the client reads a clean 403, not a reset
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = 0
+        if length > 0:
+            self.rfile.read(min(length, ATTACH_MAX_BYTES))
+        self._send(b"forbidden", "text/plain", 403)
+
     def do_POST(self):
         path = self.path.split("?")[0]
         try:
             if path == "/send":
+                if not self._local_post_ok("application/json"):
+                    self._refuse()
+                    return
                 self._do_send()
             elif path == "/attach":
+                if not self._local_post_ok("application/octet-stream"):
+                    self._refuse()
+                    return
                 self._do_attach()
             else:
                 self._send(b"not found", "text/plain", 404)
-        except BrokenPipeError:
+        except ConnectionError:
+            # the whole family, same reason as do_GET above: a tab closed
+            # mid-upload raises ConnectionResetError, a sibling of
+            # BrokenPipeError, and answering it 500 raised a second error
             pass
         except Exception as e:
             body = json.dumps({"error": str(e)}).encode()
