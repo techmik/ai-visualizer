@@ -498,6 +498,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class _Server(ThreadingHTTPServer):
+    # SO_REUSEADDR on Windows lets a second listener bind a port that is
+    # already being listened on, which makes the "already running" probe
+    # below dead code; on POSIX it only eases restart after Ctrl-C.
+    allow_reuse_address = sys.platform != "win32"
+
+
 if __name__ == "__main__":
     mode = f"MOCK={MOCK}" if MOCK else f"bus: {BUS}"
     root = f"http://127.0.0.1:{PORT}/"
@@ -511,7 +518,7 @@ if __name__ == "__main__":
     # window closed. The end-user symptom was "I can hear my agent but the
     # face never shows up", with the face running perfectly the entire time.
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        srv = _Server(("127.0.0.1", PORT), Handler)
     except OSError as e:
         if e.errno not in (errno.EADDRINUSE, errno.EACCES):
             raise
@@ -534,7 +541,6 @@ if __name__ == "__main__":
         print("Close whatever is using it, or set a different \"port\" in "
               "ai-visualizer.json.", flush=True)
         sys.exit(1)
-    srv.allow_reuse_address = True
     print(f"ai-visualizer on {root}  opening {url}  ({mode})  Ctrl-C stops", flush=True)
     if not NO_OPEN:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
