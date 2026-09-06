@@ -83,6 +83,10 @@ const AV = (() => {
     if (cfg.name) { A.name = String(cfg.name); A.label = dotted(A.name); }
     A.badge = String(cfg.badge || "");
     if (cfg.thinking_sound === false) A._sndWant = false;
+    // Opt-in ghost-text reply suggestions (server.py /suggest). Off unless
+    // suggest_replies is set AND the server has GEMINI_API_KEY, so the chat
+    // box only asks for one when it could actually use it.
+    A.suggest = !!cfg.suggest;
     A.faces = cfg.faces || [];
     A.agent = cfg.agent || {};
     A._ready = true;
@@ -467,6 +471,25 @@ const AV = (() => {
     const fileTray = wrap.querySelector("#av-chat-files");
     const permEl = wrap.querySelector("#av-chat-perm");
 
+    // Ghost-text reply suggestion. Shown as the input's placeholder (so it
+    // only appears while the box is empty, which is exactly when we want
+    // it). Tab -- or -> in an empty box -- drops it in as a real, editable
+    // draft; it NEVER sends on its own. Enter still sends, same as anything
+    // typed. A voice-only session with the chat hidden never asks for one.
+    const DEFAULT_PH = input.getAttribute("placeholder");
+    let ghost = "";            // current suggestion text, "" = none
+    let ghostPending = false;  // a /suggest request is in flight
+    let ghostSig = "";         // transcript signature last asked for
+    function clearGhost() {
+      if (!ghost) return;
+      ghost = "";
+      input.placeholder = DEFAULT_PH;
+    }
+    function showGhost(s) {
+      ghost = s;
+      input.placeholder = "⇥ " + s;   // U+21E5 (⇥) hints "press Tab"
+    }
+
     // Files picked (or dropped) but not yet sent. Each POSTs to /attach
     // right away; the server saves it beside the bus and returns an
     // absolute path. On send, every finished upload's path is appended to
@@ -619,7 +642,10 @@ const AV = (() => {
       input.style.height = "auto";
       input.style.height = Math.min(input.scrollHeight, innerHeight * .4) + "px";
     }
-    input.addEventListener("input", autosize);
+    input.addEventListener("input", () => {
+      autosize();
+      if (input.value) clearGhost();   // you're writing your own message now
+    });
 
     function trySend() {
       const typed = input.value.trim();
@@ -638,6 +664,7 @@ const AV = (() => {
         text += (text ? "\n\n" : "") +
           ready.map(a => "[Attached file: " + a.path + "]").join("\n");
       input.value = "";
+      clearGhost();
       autosize();
       attached.length = 0;
       fileTray.textContent = "";
@@ -661,6 +688,16 @@ const AV = (() => {
         e.stopPropagation(); e.preventDefault(); toggleChat(); return;
       }
       e.stopPropagation();
+      // Ghost suggestion: Tab (or -> in an empty box) promotes it to a
+      // real, editable draft. It does NOT send -- Enter still does that.
+      if (ghost && (e.key === "Tab" ||
+          (e.key === "ArrowRight" && !input.value))) {
+        e.preventDefault();
+        input.value = ghost;
+        clearGhost();
+        autosize();
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         trySend();
@@ -706,12 +743,55 @@ const AV = (() => {
           // transcript outgrows the old one
           log.replaceChildren();
           seen = 0;
+          ghostSig = "";
         }
         for (let i = seen; i < entries.length; i++)
           addLine(entries[i].role, entries[i].text);
         seen = entries.length;
+        maybeSuggest(entries);
       } catch (e) { /* server gone: hold what we have */ }
     }, 700);
+
+    // Ask for one ghost suggestion per completed turn, and only when it
+    // could actually be seen and used: feature on, chat visible, box empty,
+    // no permission card up, the model idle, and the newest real line is
+    // the assistant's. A spoken turn with the chat hidden asks for nothing.
+    async function maybeSuggest(entries) {
+      if (!A.suggest || ghostPending) return;
+      if (wrap.style.display === "none" || input.value) return;
+      if (A.state && A.state !== "idle") return;
+      if (A.permission && A.permission.id) return;
+      const conv = entries.filter(e =>
+        e.role === "user" || e.role === "assistant");
+      const last = conv[conv.length - 1];
+      if (!last || last.role !== "assistant") return;
+      const sig = conv.length + ":" + String(last.text || "").slice(0, 64);
+      if (sig === ghostSig) return;
+      ghostSig = sig;
+      ghostPending = true;
+      try {
+        const r = await fetch("/suggest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ turns: conv.slice(-8) }),
+        });
+        const s = String((await r.json()).suggestion || "").trim();
+        // conditions can change during the await -- re-check before showing
+        if (s && !input.value && wrap.style.display !== "none" &&
+            (!A.state || A.state === "idle") &&
+            !(A.permission && A.permission.id))
+          showGhost(s);
+      } catch (e) { /* offline or disabled: no ghost */ }
+      finally { ghostPending = false; }
+    }
+
+    // A new turn -- spoken or typed -- makes any pending ghost stale.
+    let ghostState = "idle";
+    setInterval(() => {
+      const st = A.state || "idle";
+      if (st !== "idle" && ghostState === "idle") clearGhost();
+      ghostState = st;
+    }, 250);
 
     // Approve/deny card, like the desktop app's permission prompt. A.permission
     // is refreshed every frame by tick() off /state; it holds the ask the

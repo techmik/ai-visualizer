@@ -31,6 +31,10 @@ Ask whether they run [backtalk](https://github.com/jaredrhod/backtalk) (or anoth
 
 `assets/thinking.wav` plays in the browser while the agent thinks. Ask if they want it. If not, set `"thinking_sound": false`. If they use backtalk and prefer the sound from the voice line instead, point backtalk's `"thinking_sound"` config at this repo's `assets/thinking.wav` and leave the browser side on; the bus deference means it never plays twice.
 
+## Phase 4.5: Reply suggestions (optional)
+
+Only if they want it: after each reply, the chat box can show a greyed-out guess at their next message, which **Tab** drops into the box as an editable draft (it never sends on its own). It needs two things — `"suggest_replies": true` in `ai-visualizer.json`, and a `GEMINI_API_KEY` in the environment the server starts from. Without both, the feature is a silent no-op and nothing reaches an outside model. Skip this for anyone who didn't ask; it's off by default for a reason.
+
 ## Phase 5: Test-fire
 
 Restart the server. Then, in order:

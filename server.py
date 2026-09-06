@@ -50,6 +50,14 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
            box appends that absolute path to the outgoing message as an
            [Attached file: ...] line so the agent can just open it.
            Uploads older than 7 days are pruned whenever a new one lands.
+  /suggest POST {"turns": [{role, text}, ...]}, returns {"suggestion": "..."}.
+           OPT-IN and off by default: only does anything when "suggest_replies"
+           is true in ai-visualizer.json AND GEMINI_API_KEY is in the
+           environment. Asks a small, cheap model for the single most likely
+           next thing the user would type; the chat box shows it as ghost
+           text (Tab fills it into the box, Enter still sends). A no-op —
+           returns "" — when disabled or unconfigured, so a voice-only
+           session that never opens the chat box never spends anything.
 
 Otherwise READ-ONLY on the signal bus. The bus is written by a voice
 line (backtalk writes it natively, github.com/jaredrhod/backtalk):
@@ -103,6 +111,9 @@ DEFAULTS = {
     "port": 8790,
     "bus_dir": "",          # where the .voice_* files live ("" = here)
     "thinking_sound": True, # play assets/thinking.wav while thinking
+    "suggest_replies": False,  # opt-in ghost-text next-reply suggestions in
+                               # the chat box; also needs GEMINI_API_KEY in
+                               # the environment. Off => /suggest is a no-op.
 }
 
 
@@ -338,6 +349,63 @@ def save_attachment(raw_name, data):
     return str(target)
 
 
+# --- optional ghost-text reply suggestions (opt-in, see /suggest above) -------
+# Deliberately a small, cheap model reached over plain urllib (stdlib only,
+# same shape as backtalk's ask_gemini.py). Every failure path — disabled, no
+# key, network, bad response, timeout — returns "" and the chat box simply
+# shows no ghost. It must never raise and never block a face's own polling
+# (the server is threaded, so one slow /suggest doesn't stall /state).
+SUGGEST_MODEL = "gemini-3.5-flash-lite"
+SUGGEST_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{SUGGEST_MODEL}:generateContent")
+SUGGEST_MAX_TURNS = 8
+SUGGEST_TIMEOUT_S = 8
+SUGGEST_PROMPT = (
+    "Predict what the USER types next in this conversation with their AI "
+    "assistant. Output only that message: first person as the user, one "
+    "line, at most 15 words, no surrounding quotes, no preamble. If nothing "
+    "is clearly likely, output nothing.\n\n"
+)
+
+
+def suggest_enabled():
+    return bool(CFG.get("suggest_replies")) and \
+        bool(os.environ.get("GEMINI_API_KEY"))
+
+
+def suggest_reply(turns):
+    """One predicted next user message, or "". Never raises."""
+    if not suggest_enabled():
+        return ""
+    try:
+        convo = []
+        for t in list(turns or [])[-SUGGEST_MAX_TURNS:]:
+            if not isinstance(t, dict):
+                continue
+            who = "User" if t.get("role") == "user" else "Assistant"
+            text = " ".join(str(t.get("text", "")).split())[:600]
+            if text:
+                convo.append(f"{who}: {text}")
+        if not convo:
+            return ""
+        body = json.dumps({
+            "contents": [{"parts": [
+                {"text": SUGGEST_PROMPT + "\n".join(convo)}]}],
+            "generationConfig": {"maxOutputTokens": 120, "temperature": 0.7},
+        }).encode()
+        req = urllib.request.Request(
+            SUGGEST_URL, data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "x-goog-api-key": os.environ["GEMINI_API_KEY"]})
+        with urllib.request.urlopen(req, timeout=SUGGEST_TIMEOUT_S) as r:
+            out = json.loads(r.read().decode("utf-8", "replace"))
+        text = out["candidates"][0]["content"]["parts"][0]["text"] or ""
+        text = text.strip().splitlines()[0].strip().strip('"').strip("'")
+        return text.strip()[:160]
+    except Exception:
+        return ""
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -349,6 +417,7 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"name": CFG["name"], "badge": CFG["badge"],
                        "face": CFG["face"],
                        "thinking_sound": bool(CFG["thinking_sound"]),
+                       "suggest": suggest_enabled(),
                        "faces": list_faces(),
                        "agent": read_agent_meta()}
                 self._send(json.dumps(out).encode(), "application/json")
@@ -423,6 +492,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._refuse()
                     return
                 self._do_attach()
+            elif path == "/suggest":
+                if not self._local_post_ok("application/json"):
+                    self._refuse()
+                    return
+                self._do_suggest()
             else:
                 self._send(b"not found", "text/plain", 404)
         except ConnectionError:
@@ -449,6 +523,21 @@ class Handler(BaseHTTPRequestHandler):
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(inbox / name)
         self._send(json.dumps({"ok": True}).encode(), "application/json")
+
+    def _do_suggest(self):
+        """Return {"suggestion": "..."} — the predicted next user message,
+        or "" when the feature is off/unconfigured or the model gives
+        nothing. Reads nothing, writes nothing; the one POST route that
+        does not touch the bus."""
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            body = {}
+        turns = body.get("turns") if isinstance(body, dict) else None
+        text = suggest_reply(turns if isinstance(turns, list) else [])
+        self._send(json.dumps({"suggestion": text}).encode(),
+                   "application/json")
 
     def _do_attach(self):
         length = int(self.headers.get("Content-Length", 0))

@@ -20,6 +20,15 @@ The face is only as alive as the bus it reads. Work down the chain:
 - If your voice line plays its own thinking sound, this one stays deliberately silent (that is the `.voice_loading_pid` deference working, not a bug).
 - `"thinking_sound": false` in the config disables it everywhere.
 
+## The reply suggestion never appears
+
+The greyed-out next-message guess (Tab to use it) is opt-in and needs both halves:
+
+1. `"suggest_replies": true` in `ai-visualizer.json` (restart the server after editing).
+2. A `GEMINI_API_KEY` in the environment the server was started from. `/config` reports `"suggest": false` when either is missing, and the chat box then never asks.
+
+It also only shows when it could be used: the chat box open, the input empty, no permission card up, and the agent idle after a reply. A spoken turn with the chat box hidden deliberately asks for nothing. If all of that is true and it's still blank, the model returned nothing usable that turn (it's told to stay silent when there's no clear next message) — the next turn tries again.
+
 ## The mic meters run flat
 
 The listening ribbon and MIC gauges want microphone permission, which the browser asks for on first load. Denied permission is fine; the meters just stay flat while everything else works. To grant it later, click the padlock in the address bar and allow the microphone.
