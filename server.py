@@ -33,6 +33,22 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
                                      a permission ask waits; the chat box
                                      draws an approve/deny card and answers
                                      via /send ("yes"/"no"/"details")
+  /panels  polled by the side panels (core.js: panelsInit()) about once a
+           minute: {"cards": [{id, side, title, rows: [{label, value,
+           pct?, hot?}], note?}]}. OPT-IN via "panels" in
+           ai-visualizer.json (off by default). Every source is optional
+           and refreshed on a background thread, so this route only ever
+           returns a cache and never waits on the network:
+             weather     Open-Meteo, no key  ("weather": {lat, lon, label})
+             calendar    any command printing {"events": [{summary,
+                         start, end}]} ("calendar": {"command": [...]})
+             priorities  bold lead-ins from a markdown list
+                         ("priorities": {file, sections?, max?,
+                         per_section?})
+             jobs        any program can drop .voice_panel_<name>.json on
+                         the bus in the card shape above (plus optional
+                         "expires", a unix epoch) and it shows up as a card.
+                         Delete the file to remove the card.
   /config  the merged ai-visualizer.json plus the list of installed
            faces, discovered by scanning the faces/ folder. Drop a new
            folder with an index.html into faces/ and it appears in the
@@ -97,6 +113,9 @@ import webbrowser
 import urllib.parse
 import urllib.request
 import errno
+import glob
+import subprocess
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -253,9 +272,18 @@ def read_bus():
         permission = json.loads((BUS / ".voice_permission").read_text())
     except (OSError, ValueError):
         pass
+    # What the session is LIVE on (model/effort/mode/mic), rewritten by the
+    # voice line on every runtime switch. Empty from an older voice line
+    # that never writes it; faces then fall back to /config's agent meta.
+    session = {}
+    try:
+        session = json.loads((BUS / ".voice_session").read_text())
+    except (OSError, ValueError):
+        pass
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
-            "context": context, "permission": permission}
+            "context": context, "permission": permission,
+            "session": session}
 
 
 def read_transcript():
@@ -406,6 +434,253 @@ def suggest_reply(turns):
         return ""
 
 
+# --- side panels (opt-in, see /panels above) ---------------------------------
+# The same containment rule as /suggest: every source is wrapped, a failing
+# source becomes a card with a short note (or no card), and nothing here can
+# raise into a request or stall /state. Sources refresh on ONE background
+# thread; /panels only ever reads the cache.
+PANELS = CFG.get("panels") if isinstance(CFG.get("panels"), dict) else {}
+PANELS_ON = bool(PANELS.get("enabled"))
+PANEL_REFRESH_S = max(60.0, float(PANELS.get("refresh_minutes", 15)) * 60)
+_panel_cache = {}                 # source id -> card dict, or absent
+_panel_lock = threading.Lock()
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console flash
+
+# WMO weather codes (what Open-Meteo returns), collapsed to a few words.
+_WMO = {0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Overcast",
+        45: "Fog", 48: "Fog", 51: "Light drizzle", 53: "Drizzle",
+        55: "Heavy drizzle", 56: "Freezing drizzle", 57: "Freezing drizzle",
+        61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Freezing rain",
+        67: "Freezing rain", 71: "Light snow", 73: "Snow", 75: "Heavy snow",
+        77: "Snow grains", 80: "Showers", 81: "Showers", 82: "Heavy showers",
+        85: "Snow showers", 86: "Snow showers", 95: "Thunderstorm",
+        96: "Thunderstorm, hail", 99: "Thunderstorm, hail"}
+
+
+def _panel_weather(w):
+    imperial = w.get("units", "fahrenheit") == "fahrenheit"
+    q = urllib.parse.urlencode({
+        "latitude": w["lat"], "longitude": w["lon"],
+        "current": "temperature_2m,apparent_temperature,weather_code,"
+                   "wind_speed_10m",
+        "daily": "temperature_2m_max,temperature_2m_min,"
+                 "precipitation_probability_max",
+        "forecast_days": 1, "timezone": "auto",
+        "temperature_unit": "fahrenheit" if imperial else "celsius",
+        "wind_speed_unit": "mph" if imperial else "kmh"})
+    with urllib.request.urlopen(
+            "https://api.open-meteo.com/v1/forecast?" + q, timeout=10) as r:
+        d = json.loads(r.read().decode("utf-8", "replace"))
+    cur, day = d["current"], d["daily"]
+    deg = "°"
+    rows = [
+        {"label": "Now", "value": f"{round(cur['temperature_2m'])}{deg}  "
+                                  f"{_WMO.get(cur.get('weather_code'), '')}"},
+        {"label": "Feels", "value":
+            f"{round(cur['apparent_temperature'])}{deg}"},
+        {"label": "Hi / Lo", "value":
+            f"{round(day['temperature_2m_max'][0])}{deg} / "
+            f"{round(day['temperature_2m_min'][0])}{deg}"},
+        {"label": "Wind", "value": f"{round(cur['wind_speed_10m'])} "
+                                   f"{'mph' if imperial else 'km/h'}"},
+    ]
+    rain = (day.get("precipitation_probability_max") or [None])[0]
+    if rain is not None:
+        rows.append({"label": "Rain", "value": f"{rain}%", "pct": rain})
+    title = "Weather" + (" · " + w["label"] if w.get("label") else "")
+    return {"id": "weather", "side": "left", "title": title, "rows": rows}
+
+
+def _fmt_when(start):
+    """A Google Calendar start ('2026-09-22T08:00:00-04:00', or '2026-10-02'
+    for all-day) -> 'Today 8:00 AM' / 'Tomorrow' / 'Thu 10/2 2:30 PM'."""
+    try:
+        if "T" in start:
+            dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            dt = dt.astimezone() if dt.tzinfo else dt
+            all_day = False
+        else:
+            dt, all_day = datetime.fromisoformat(start), True
+    except (TypeError, ValueError):
+        return str(start or "")
+    today = datetime.now().date()
+    d = dt.date()
+    if d == today:
+        day = "Today"
+    elif d == today + timedelta(days=1):
+        day = "Tomorrow"
+    elif 0 < (d - today).days < 7:
+        day = dt.strftime("%a")
+    else:
+        day = f"{dt.strftime('%a')} {d.month}/{d.day}"
+    if all_day:
+        return day
+    return f"{day} {dt.strftime('%I:%M %p').lstrip('0')}"
+
+
+def _end_epoch(end):
+    try:
+        if "T" in end:
+            return datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(end).timestamp()   # all-day: local midnight
+    except (TypeError, ValueError):
+        return None
+
+
+def _panel_calendar(c):
+    out = subprocess.run(c["command"], capture_output=True, text=True,
+                         timeout=45, creationflags=_NO_WINDOW)
+    d = json.loads(out.stdout or "{}")
+    card = {"id": "calendar", "side": "left", "title": "Calendar", "rows": []}
+    if d.get("error"):
+        # The usual cause is the ~7-day Testing-mode token expiry; say so
+        # plainly instead of drawing an empty calendar.
+        card["note"] = "Calendar sign-in expired, needs a re-consent"
+        return card
+    for ev in (d.get("events") or [])[:int(c.get("max", 4))]:
+        card["rows"].append({"label": _fmt_when(ev.get("start")),
+                             "value": ev.get("summary") or "(no title)",
+                             "_ends": _end_epoch(ev.get("end"))})
+    if not card["rows"]:
+        card["note"] = "Nothing coming up"
+    return card
+
+
+_BOLD_ITEM = re.compile(r"^\s*[-*]\s+\*\*(.+?)\*\*")
+_WIKILINK = re.compile(r"\[\[(?:[^\]|]*\|)?([^\]]+)\]\]")
+_FLAG = re.compile(r"\[(BLOCKED|ON HOLD|WAITING[^\]]*|OVERDUE[^\]]*)\]", re.I)
+
+
+def _panel_priorities(p):
+    """Bold lead-ins from a '## Section' / '- **Item:** detail' markdown list.
+    "file" may be a glob; the newest match wins (a cache that renames itself
+    on every regeneration still works)."""
+    matches = sorted(glob.glob(os.path.expanduser(p["file"])),
+                     key=os.path.getmtime)
+    if not matches:
+        return {"id": "priorities", "side": "left", "title": "Priorities",
+                "rows": [], "note": "Priorities file not found"}
+    text = Path(matches[-1]).read_text(encoding="utf-8", errors="replace")
+    want = p.get("sections")
+    skip = set(p.get("skip_sections", ["Guiding Decisions"]))
+    mx = int(p.get("max", 8))
+    per = int(p.get("per_section", 0)) or mx   # so one section can't hog it
+    rows, section, headed, in_sec = [], None, None, 0
+    for line in text.splitlines():
+        if line.startswith("## "):
+            section = line[3:].strip()
+            continue
+        if not section or section in skip or (want and section not in want):
+            continue
+        m = _BOLD_ITEM.match(line)
+        if not m:
+            continue
+        # A flag can sit inside the bold or just after it; look at both.
+        flag = _FLAG.search(line)
+        title = _WIKILINK.sub(r"\1", m.group(1)).replace("`", "")
+        title = _FLAG.sub("", title)
+        # Drop dated/ID-ish asides ("(found 2026-08-11)", "(`KB5120249`)"),
+        # keep short naming ones ("Phase 2 (Hearth dashboard)").
+        title = re.sub(r"\s*\(([^)]*)\)",
+                       lambda m: "" if re.search(r"\d", m.group(1))
+                       or len(m.group(1)) > 24 else m.group(0), title)
+        title = title.strip().rstrip(":.").strip()
+        if not title or "✅" in line[:12]:
+            continue
+        if section != headed:
+            rows.append({"head": section})
+            headed, in_sec = section, 0
+        if in_sec >= per:
+            continue
+        in_sec += 1
+        row = {"value": title}
+        if flag:
+            f = flag.group(1).upper()
+            row["label"] = "HOLD" if f.startswith("ON HOLD") else f.split()[0]
+            row["hot"] = True
+        rows.append(row)
+        if sum(1 for r in rows if "value" in r) >= mx:
+            break
+    return {"id": "priorities", "side": "left",
+            "title": p.get("title", "Priorities"), "rows": rows}
+
+
+_PANEL_SOURCES = (("calendar", _panel_calendar), ("weather", _panel_weather),
+                  ("priorities", _panel_priorities))
+
+
+def _refresh_panels():
+    for key, fn in _PANEL_SOURCES:
+        conf = PANELS.get(key)
+        if not conf:
+            continue
+        try:
+            card = fn(conf)
+        except Exception as e:
+            # keep the last good card if there is one; a blip shouldn't blank
+            # the panel. Only a source that never worked shows the note.
+            with _panel_lock:
+                if key in _panel_cache:
+                    continue
+            card = {"id": key, "side": "left", "title": key.title(),
+                    "rows": [], "note": f"Unavailable ({type(e).__name__})"}
+        if isinstance(conf, dict) and conf.get("side") in ("left", "right"):
+            card["side"] = conf["side"]
+        with _panel_lock:
+            _panel_cache[key] = card
+
+
+def _panel_loop():
+    while True:
+        _refresh_panels()
+        time.sleep(PANEL_REFRESH_S)
+
+
+def _job_cards():
+    """Drop-in cards: any .voice_panel_*.json on the bus, re-read on every
+    request (they're tiny and they're how long jobs report progress)."""
+    now = time.time()
+    cards = []
+    for p in sorted(BUS.glob(".voice_panel_*.json")):
+        try:
+            c = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(c, dict):
+            continue
+        exp = c.get("expires")
+        if isinstance(exp, (int, float)) and exp < now:
+            continue
+        c.setdefault("id", p.stem[len(".voice_panel_"):])
+        c.setdefault("side", "right")
+        c.setdefault("title", c["id"].replace("_", " ").title())
+        if not isinstance(c.get("rows"), list):
+            c["rows"] = []
+        cards.append(c)
+    return cards
+
+
+def read_panels():
+    if not PANELS_ON:
+        return {"cards": []}
+    now = time.time()
+    with _panel_lock:
+        cached = [dict(c) for c in _panel_cache.values()]
+    order = {k: i for i, (k, _) in enumerate(_PANEL_SOURCES)}
+    cached.sort(key=lambda c: order.get(c.get("id"), 99))
+    for c in cached:
+        # A calendar event that ended since the last refresh drops off now,
+        # not up to refresh_minutes later.
+        # (copies: the cached rows keep their _ends for the next request)
+        rows = [{k: v for k, v in r.items() if k != "_ends"}
+                for r in c.get("rows", [])
+                if not (r.get("_ends") and r["_ends"] < now)]
+        c["rows"] = rows
+        if c.get("id") == "calendar" and not rows and not c.get("note"):
+            c["note"] = "Nothing coming up"
+    return {"cards": cached + _job_cards()}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -418,11 +693,15 @@ class Handler(BaseHTTPRequestHandler):
                        "face": CFG["face"],
                        "thinking_sound": bool(CFG["thinking_sound"]),
                        "suggest": suggest_enabled(),
+                       "panels": PANELS_ON,
                        "faces": list_faces(),
                        "agent": read_agent_meta()}
                 self._send(json.dumps(out).encode(), "application/json")
             elif path == "/transcript":
                 self._send(json.dumps(read_transcript()).encode(),
+                           "application/json")
+            elif path == "/panels":
+                self._send(json.dumps(read_panels()).encode(),
                            "application/json")
             else:
                 self._static(path)
@@ -633,6 +912,8 @@ if __name__ == "__main__":
     print(f"ai-visualizer on {root}  opening {url}  ({mode})  Ctrl-C stops", flush=True)
     if not NO_OPEN:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    if PANELS_ON:
+        threading.Thread(target=_panel_loop, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

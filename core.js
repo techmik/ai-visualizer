@@ -87,6 +87,7 @@ const AV = (() => {
     // suggest_replies is set AND the server has GEMINI_API_KEY, so the chat
     // box only asks for one when it could actually use it.
     A.suggest = !!cfg.suggest;
+    A.panels = !!cfg.panels;
     A.faces = cfg.faces || [];
     A.agent = cfg.agent || {};
     A._ready = true;
@@ -163,6 +164,10 @@ const AV = (() => {
     // A permission ask waiting for an answer, or {} when none. The chat
     // box draws an approve/deny card off this; other faces ignore it.
     A.permission = raw.permission || {};
+    // What the voice line is LIVE on {model, effort, mode, mic, degraded,
+    // turns?, cost?}; {} from a voice line that doesn't publish it, in
+    // which case readers fall back to A.agent (launch config).
+    A.session = raw.session || {};
     A.level = raw.level || 0;
 
     // adaptive envelope: normalize against a decaying peak, then ease
@@ -585,17 +590,34 @@ const AV = (() => {
       for (const f of e.dataTransfer.files) uploadFile(f);
     });
 
-    // model/effort/mode from server.py's /config (which reads backtalk.json),
-    // shown like the desktop app's "Manual · Sonnet 5 · High" indicator.
+    // model/effort/mode, shown like the desktop app's "Manual · Sonnet 5 ·
+    // High" indicator. Live values come from the bus (A.session, rewritten by
+    // the voice line on every runtime switch); anything it doesn't carry
+    // falls back to /config's agent meta, which is launch config only.
     const titleCase = s => String(s || "").replace(/\b\w/g, c => c.toUpperCase());
-    const prettyModel = m => String(m || "").replace(/^claude-/, "").split("-")
+    // claude-opus-5-5 -> "Opus 5.5" (version digits rejoin with a dot; a
+    // trailing date stamp like 20251001 is dropped)
+    const prettyModel = m => String(m || "").replace(/^claude-/, "")
+      .replace(/-\d{8}$/, "").replace(/(\d)-(?=\d)/g, "$1.").split("-")
       .map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(" ").trim();
-    A.ready(a => {
-      const ag = a.agent || {};
-      modeEl.textContent = titleCase(ag.mode);
-      const m = prettyModel(ag.model), e = titleCase(ag.effort);
+    const prettyMode = m => m === "bypassPermissions" ? "Auto" : titleCase(m);
+    A.live = () => {
+      const ag = A.agent || {}, s = A.session || {};
+      return { model: s.model || ag.model, effort: s.effort || ag.effort,
+               mode: s.mode || ag.mode, mic: s.mic, degraded: !!s.degraded,
+               turns: s.turns, cost: s.cost };
+    };
+    A.pretty = { model: prettyModel, mode: prettyMode, title: titleCase };
+    function paintModel() {
+      if (!A._ready) return;
+      const lv = A.live();
+      modeEl.textContent = prettyMode(lv.mode);
+      const m = lv.degraded ? "Local backup" : prettyModel(lv.model);
+      const e = titleCase(lv.effort);
       modelEl.textContent = m && e ? m + " · " + e : (m || e);
-    });
+    }
+    A.ready(paintModel);
+    setInterval(paintModel, 1000);
 
     function addLine(role, text) {
       if (role === "thinking") {
@@ -874,12 +896,143 @@ const AV = (() => {
     requestAnimationFrame(loop);
   };
 
+  /* -------------------------------- panels --------------------------------- */
+  // Glanceable side cards in the empty space either side of the chat box.
+  // OPT-IN ("panels" in ai-visualizer.json, see server.py /panels). Right
+  // column opens with a live-session card built here off A.session (so it
+  // follows a spoken model switch within a second); every other card comes
+  // from /panels, polled once a minute. Injected once so every face gets it.
+  // Hidden during a face's cinematic mode (body.cine), with ?nopanels, or
+  // any time with Ctrl+. (period).
+  function panelsInit() {
+    if (SHOT || DEMO) return;
+    const L = document.createElement("div"), R = document.createElement("div");
+    L.id = "av-panels-l"; R.id = "av-panels-r";
+    L.className = R.className = "av-panels";
+    const style = document.createElement("style");
+    style.textContent = `
+      .av-panels{position:fixed;top:max(190px,20vh);bottom:110px;z-index:20;
+        width:min(560px,calc((100vw - min(960px,86vw)) / 2 - 100px));
+        display:flex;flex-direction:column;gap:16px;overflow:hidden;
+        pointer-events:none;transition:opacity .7s;
+        font:14px/1.55 "SF Mono",ui-monospace,Menlo,Consolas,monospace;
+        color:#c5dccf}
+      #av-panels-l{left:56px} #av-panels-r{right:56px}
+      body.cine .av-panels{opacity:0}
+      .av-panels.av-off{display:none}
+      @media (max-width:1500px){.av-panels{display:none}}
+      .av-card{flex:0 0 auto;background:rgba(6,18,12,.55);
+        backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+        border:1px solid rgba(61,220,132,.16);border-radius:6px;
+        padding:12px 16px 13px;box-shadow:0 8px 28px rgba(0,0,0,.3)}
+      .av-card-t{font-size:12px;letter-spacing:.3em;text-transform:uppercase;
+        color:#6f8f80;margin-bottom:7px;white-space:nowrap;overflow:hidden;
+        text-overflow:ellipsis}
+      .av-card-note{color:#8b857b;font-style:italic}
+      .av-row{display:flex;gap:12px;align-items:baseline;min-width:0}
+      .av-row .av-l{flex:0 0 auto;min-width:5.5em;color:#6f8f80;
+        letter-spacing:.06em}
+      .av-row .av-l:empty{display:none}
+      .av-row .av-v{flex:1 1 auto;min-width:0;color:#dfeee6;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .av-row.av-hot .av-l,.av-row.av-hot .av-v{color:#ff9a7a}
+      .av-head{margin:8px 0 2px;font-size:11.5px;letter-spacing:.22em;
+        text-transform:uppercase;color:#4f7a66}
+      .av-bar{height:3px;border-radius:2px;margin:3px 0 5px;
+        background:rgba(255,255,255,.08);overflow:hidden}
+      .av-bar span{display:block;height:100%;background:rgba(61,220,132,.6)}
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(L);
+    document.body.appendChild(R);
+    const setOff = off => { L.classList.toggle("av-off", off);
+                            R.classList.toggle("av-off", off); };
+    setOff(Q.has("nopanels"));
+    addEventListener("keydown", e => {
+      if (e.ctrlKey && !e.altKey && !e.metaKey &&
+          (e.code === "Period" || e.key === ".")) {
+        e.preventDefault();
+        setOff(!L.classList.contains("av-off"));
+      }
+    });
+
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = String(text);
+      return n;
+    };
+    function cardEl(c) {
+      const card = el("div", "av-card");
+      card.appendChild(el("div", "av-card-t", c.title || ""));
+      if (c.note) card.appendChild(el("div", "av-card-note", c.note));
+      for (const r of c.rows || []) {
+        if (r.head) { card.appendChild(el("div", "av-head", r.head)); continue; }
+        const row = el("div", "av-row" + (r.hot ? " av-hot" : ""));
+        row.appendChild(el("span", "av-l", r.label || ""));
+        row.appendChild(el("span", "av-v", r.value == null ? "" : r.value));
+        card.appendChild(row);
+        const pct = Number(r.pct);
+        if (r.pct != null && isFinite(pct)) {
+          const bar = el("div", "av-bar"), fill = el("span");
+          fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+          bar.appendChild(fill);
+          card.appendChild(bar);
+        }
+      }
+      return card;
+    }
+    function sessionCard() {
+      const lv = A.live ? A.live() : {};
+      const P = A.pretty || { model: String, mode: String, title: String };
+      const rows = [];
+      if (lv.degraded)
+        rows.push({ label: "Brain", value: "Local backup", hot: true });
+      rows.push({ label: "Model", value: P.model(lv.model) || "—" });
+      rows.push({ label: "Effort", value: P.title(lv.effort) || "—" });
+      rows.push({ label: "Perms", value: P.mode(lv.mode) || "—",
+                  hot: lv.mode === "bypassPermissions" });
+      if (lv.mic) rows.push({ label: "Mic", value:
+        lv.mic === "open" ? "Hands-free" : "Push to talk" });
+      if (lv.turns != null) rows.push({ label: "Turns", value: lv.turns });
+      if (lv.cost != null) rows.push({ label: "Cost",
+        value: "$" + Number(lv.cost).toFixed(2) });
+      return { id: "session", side: "right", title: "Session", rows };
+    }
+
+    let served = [], lastSig = "";
+    function paint() {
+      const cards = [sessionCard()].concat(served);
+      const sig = JSON.stringify(cards);
+      if (sig === lastSig) return;       // repaint only on a real change
+      lastSig = sig;
+      const left = [], right = [];
+      for (const c of cards) (c.side === "right" ? right : left).push(cardEl(c));
+      L.replaceChildren(...left);
+      R.replaceChildren(...right);
+    }
+    async function pull() {
+      try {
+        const r = await fetch("/panels", { cache: "no-store" });
+        served = ((await r.json()).cards || []);
+      } catch (e) { /* server gone: keep the last cards */ }
+      paint();
+    }
+    A.ready(a => {
+      if (!a.panels) { L.remove(); R.remove(); style.remove(); return; }
+      pull();
+      setInterval(pull, 60000);
+      setInterval(paint, 1000);
+    });
+  }
+
   /* ---------------------------------- init --------------------------------- */
   A.init = (opts = {}) => {
     A._mic = !!opts.mic;
     if (A._mic && !DEMO) micStart();
     if (opts.sound !== false) soundInit(); else A._sndWant = false;
     chatInit();
+    panelsInit();
     cursorInit();
     if (DEMO) {
       applyConfig({ name: Q.get("name") || "JARVIS" });

@@ -4,5 +4,12 @@
   "face": "board",
   "port": 8790,
   "bus_dir": "",
-  "thinking_sound": true
+  "thinking_sound": true,
+  "panels": {
+    "enabled": false,
+    "refresh_minutes": 15,
+    "weather": {"lat": 40.7128, "lon": -74.0060, "label": "New York", "units": "fahrenheit"},
+    "calendar": {"command": ["python", "path/to/prints_events_json.py"], "max": 4},
+    "priorities": {"file": "~/notes/Priorities.md", "max": 8}
+  }
 }
