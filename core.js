@@ -33,7 +33,7 @@
      AV.alert      bool, optional attention signal
      AV.micLevel   0..1 your microphone (only if init({mic:true}))
      AV.name       display name from config ("JARVIS" by default)
-     AV.label      the dotted chip label ("J.A.R.V.I.S.")
+     AV.label      the chip label, the name in plain uppercase ("JARVIS")
      AV.badge      optional handle from config ("" by default)
 
    Modes:
@@ -67,21 +67,27 @@ const AV = (() => {
   const A = {
     state: "idle", level: 0, env: 0, alert: false, micLevel: 0,
     samples: new Float32Array(64),
-    name: "JARVIS", label: "J.A.R.V.I.S.", badge: "",
+    name: "JARVIS", label: "JARVIS", badge: "",
     demo: DEMO, shot: SHOT, faces: [],
     _sndOn: true, _mic: false, _readyCbs: [], _ready: false,
   };
 
+  // Plain uppercase label (no "J.A.R.V.I.S." dots) -- Mike's call 2026-09-25,
+  // both machines. Name kept so every caller stays the same.
   function dotted(name) {
-    const up = String(name).toUpperCase();
-    if (/^[A-Z0-9]{2,10}$/.test(up)) return up.split("").join(".") + ".";
-    return up;
+    return String(name).toUpperCase();
   }
 
   /* -------------------------------- config -------------------------------- */
   function applyConfig(cfg) {
     if (cfg.name) { A.name = String(cfg.name); A.label = dotted(A.name); }
     A.badge = String(cfg.badge || "");
+    // chat_width (px) sizes the chat box AND the side panels' share of the
+    // leftover width -- a narrower chat on a laptop screen gives the panels
+    // room so their values stop truncating. Default 960.
+    const cw = parseInt(cfg.chat_width, 10);
+    if (cw >= 320 && cw <= 3000)
+      document.documentElement.style.setProperty("--av-chat-w", cw + "px");
     if (cfg.thinking_sound === false) A._sndWant = false;
     // Opt-in ghost-text reply suggestions (server.py /suggest). Off unless
     // suggest_replies is set AND the server has GEMINI_API_KEY, so the chat
@@ -343,7 +349,7 @@ const AV = (() => {
     // stays above the board face's taskbar/echo line.
     style.textContent = `
       #av-chat{position:fixed;left:50%;transform:translateX(-50%);
-        bottom:72px;width:960px;max-width:86vw;
+        bottom:72px;width:var(--av-chat-w,960px);max-width:86vw;
         max-height:calc(100vh - 200px);z-index:60;
         font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
         color:#e6e4de;display:flex;flex-direction:column;
@@ -912,7 +918,7 @@ const AV = (() => {
     const style = document.createElement("style");
     style.textContent = `
       .av-panels{position:fixed;top:max(190px,20vh);bottom:110px;z-index:20;
-        width:min(560px,calc((100vw - min(960px,86vw)) / 2 - 100px));
+        width:min(560px,calc((100vw - min(var(--av-chat-w,960px),86vw)) / 2 - 100px));
         display:flex;flex-direction:column;gap:16px;overflow:hidden;
         pointer-events:none;transition:opacity .7s;
         font:14px/1.55 "SF Mono",ui-monospace,Menlo,Consolas,monospace;

@@ -133,6 +133,8 @@ DEFAULTS = {
     "suggest_replies": False,  # opt-in ghost-text next-reply suggestions in
                                # the chat box; also needs GEMINI_API_KEY in
                                # the environment. Off => /suggest is a no-op.
+    "chat_width": 960,      # chat box width in px; the side panels share
+                            # what's left, so smaller screens want less
 }
 
 
@@ -693,6 +695,7 @@ class Handler(BaseHTTPRequestHandler):
                        "face": CFG["face"],
                        "thinking_sound": bool(CFG["thinking_sound"]),
                        "suggest": suggest_enabled(),
+                       "chat_width": CFG.get("chat_width", 960),
                        "panels": PANELS_ON,
                        "faces": list_faces(),
                        "agent": read_agent_meta()}
