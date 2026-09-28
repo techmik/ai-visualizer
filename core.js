@@ -94,6 +94,7 @@ const AV = (() => {
     // box only asks for one when it could actually use it.
     A.suggest = !!cfg.suggest;
     A.panels = !!cfg.panels;
+    A.panelsPoll = Math.max(2, Number(cfg.panels_poll_seconds) || 60);
     A.faces = cfg.faces || [];
     A.agent = cfg.agent || {};
     A._ready = true;
@@ -907,7 +908,8 @@ const AV = (() => {
   // OPT-IN ("panels" in ai-visualizer.json, see server.py /panels). Right
   // column opens with a live-session card built here off A.session (so it
   // follows a spoken model switch within a second); every other card comes
-  // from /panels, polled once a minute. Injected once so every face gets it.
+  // from /panels, polled once a minute (every few seconds when the live
+  // system card is on). Injected once so every face gets it.
   // Hidden during a face's cinematic mode (body.cine), with ?nopanels, or
   // any time with Ctrl+. (period).
   function panelsInit() {
@@ -947,6 +949,26 @@ const AV = (() => {
       .av-bar{height:3px;border-radius:2px;margin:3px 0 5px;
         background:rgba(255,255,255,.08);overflow:hidden}
       .av-bar span{display:block;height:100%;background:rgba(61,220,132,.6)}
+      .av-gauges{display:flex;flex-wrap:wrap;justify-content:space-around;
+        gap:6px 4px;margin:2px 0 6px}
+      .av-gauge{position:relative;width:92px;text-align:center}
+      .av-gauge svg{display:block;width:92px;height:92px;overflow:visible}
+      .av-gauge .trk{fill:none;stroke:rgba(255,255,255,.07);stroke-width:6;
+        stroke-linecap:round}
+      .av-gauge .tick{stroke:rgba(197,220,207,.22);stroke-width:1.2}
+      .av-gauge .arc{fill:none;stroke:rgba(61,220,132,.85);stroke-width:6;
+        stroke-linecap:round;filter:drop-shadow(0 0 4px rgba(61,220,132,.55));
+        transition:stroke-dashoffset .9s cubic-bezier(.3,.7,.3,1),stroke .4s}
+      .av-gauge.av-hot .arc{stroke:#ff9a7a;
+        filter:drop-shadow(0 0 5px rgba(255,120,80,.7))}
+      .av-g-v{position:absolute;left:0;right:0;top:34px;font-size:19px;
+        color:#e8f5ee;letter-spacing:.02em}
+      .av-gauge.av-hot .av-g-v{color:#ffb39a}
+      .av-g-s{margin-top:2px;font-size:11.5px;color:#9fbcae;
+        white-space:nowrap}
+      .av-g-s:empty{display:none}
+      .av-g-l{margin-top:-14px;font-size:10.5px;letter-spacing:.22em;
+        color:#6f8f80;text-transform:uppercase;white-space:nowrap}
     `;
     document.head.appendChild(style);
     document.body.appendChild(L);
@@ -968,11 +990,68 @@ const AV = (() => {
       if (text != null) n.textContent = String(text);
       return n;
     };
+    // Round dials for rows marked "gauge" (the system card): a 270° arc that
+    // sweeps between readings. Kept by card/label so a new reading updates
+    // the live element and the CSS transition animates it.
+    const SVGNS = "http://www.w3.org/2000/svg", GR = 36,
+          GC = 2 * Math.PI * GR, GA = GC * 0.75;   // arc = 3/4 of the circle
+    let gauges = new Map(), oldGauges = new Map();
+    const gpct = r => Math.max(0, Math.min(100, Number(r.pct) || 0));
+    function gaugeSet(g, r) {
+      g.arc.style.strokeDashoffset = GA * (1 - gpct(r) / 100);
+      g.v.textContent = r.value == null ? "" : String(r.value);
+      g.s.textContent = r.sub || "";
+      g.root.classList.toggle("av-hot", !!r.hot);
+    }
+    function gaugeEl(key, r) {
+      const root = el("div", "av-gauge");
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("viewBox", "0 0 92 92");
+      const ring = cls => {
+        const c = document.createElementNS(SVGNS, "circle");
+        c.setAttribute("class", cls);
+        c.setAttribute("cx", 46); c.setAttribute("cy", 46);
+        c.setAttribute("r", GR);
+        c.setAttribute("transform", "rotate(135 46 46)");
+        c.style.strokeDasharray = `${GA} ${GC}`;
+        return c;
+      };
+      svg.appendChild(ring("trk"));
+      for (let i = 0; i <= 10; i++) {          // tick marks, like a speedo
+        const a = (135 + 27 * i) * Math.PI / 180, t =
+          document.createElementNS(SVGNS, "line");
+        const r1 = i % 5 ? 42.5 : 41, r2 = 45;
+        t.setAttribute("class", "tick");
+        t.setAttribute("x1", 46 + r1 * Math.cos(a));
+        t.setAttribute("y1", 46 + r1 * Math.sin(a));
+        t.setAttribute("x2", 46 + r2 * Math.cos(a));
+        t.setAttribute("y2", 46 + r2 * Math.sin(a));
+        svg.appendChild(t);
+      }
+      const arc = ring("arc");
+      const was = oldGauges.get(key);           // new dials sweep up from 0
+      arc.style.strokeDashoffset = was ? was.arc.style.strokeDashoffset : GA;
+      svg.appendChild(arc);
+      root.appendChild(svg);
+      const g = { root, arc, v: el("div", "av-g-v"), s: el("div", "av-g-s") };
+      root.appendChild(g.v);
+      root.appendChild(el("div", "av-g-l", r.label || ""));
+      root.appendChild(g.s);                   // GB detail, under the label
+      gauges.set(key, g);
+      requestAnimationFrame(() => requestAnimationFrame(() => gaugeSet(g, r)));
+      return root;
+    }
     function cardEl(c) {
       const card = el("div", "av-card");
       card.appendChild(el("div", "av-card-t", c.title || ""));
       if (c.note) card.appendChild(el("div", "av-card-note", c.note));
+      let dials = null;
       for (const r of c.rows || []) {
+        if (r.gauge) {
+          if (!dials) card.appendChild(dials = el("div", "av-gauges"));
+          dials.appendChild(gaugeEl(c.id + "/" + r.label, r));
+          continue;
+        }
         if (r.head) { card.appendChild(el("div", "av-head", r.head)); continue; }
         const row = el("div", "av-row" + (r.hot ? " av-hot" : ""));
         row.appendChild(el("span", "av-l", r.label || ""));
@@ -1006,12 +1085,27 @@ const AV = (() => {
       return { id: "session", side: "right", title: "Session", rows };
     }
 
-    let served = [], lastSig = "";
+    let served = [], lastSig = "", lastShape = "";
     function paint() {
       const cards = [sessionCard()].concat(served);
       const sig = JSON.stringify(cards);
       if (sig === lastSig) return;       // repaint only on a real change
       lastSig = sig;
+      // Only the dial readings changed: update them in place so they sweep.
+      const shape = JSON.stringify(cards, (k, v) =>
+        v && v.gauge ? { gauge: 1, label: v.label } : v);
+      if (shape === lastShape) {
+        for (const c of cards)
+          for (const r of c.rows || [])
+            if (r.gauge) {
+              const g = gauges.get(c.id + "/" + r.label);
+              if (g) gaugeSet(g, r);
+            }
+        return;
+      }
+      lastShape = shape;
+      oldGauges = gauges;       // a rebuilt dial picks up where it was
+      gauges = new Map();
       const left = [], right = [];
       for (const c of cards) (c.side === "right" ? right : left).push(cardEl(c));
       L.replaceChildren(...left);
@@ -1027,7 +1121,7 @@ const AV = (() => {
     A.ready(a => {
       if (!a.panels) { L.remove(); R.remove(); style.remove(); return; }
       pull();
-      setInterval(pull, 60000);
+      setInterval(pull, a.panelsPoll * 1000);
       setInterval(paint, 1000);
     });
   }

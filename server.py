@@ -49,6 +49,10 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
                          the bus in the card shape above (plus optional
                          "expires", a unix epoch) and it shows up as a card.
                          Delete the file to remove the card.
+             system      live CPU / RAM / GPU / disk on its own fast thread
+                         ("system": {interval_seconds?, disks?, side?,
+                         hot_pct?, hot_gpu_temp?}); speeds up the /panels
+                         poll to match via /config's panels_poll_seconds
   /config  the merged ai-visualizer.json plus the list of installed
            faces, discovered by scanning the faces/ folder. Drop a new
            folder with an index.html into faces/ and it appears in the
@@ -114,6 +118,7 @@ import urllib.parse
 import urllib.request
 import errno
 import glob
+import shutil
 import subprocess
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -549,6 +554,8 @@ def _panel_calendar(c):
 
 
 _BOLD_ITEM = re.compile(r"^\s*[-*]\s+\*\*(.+?)\*\*")
+_PLAIN_ITEM = re.compile(r"^\s*[-*]\s+(\S.*)$")
+_QUOTE_TAIL = re.compile(r'^(.*?[.!?])\s+"')
 _WIKILINK = re.compile(r"\[\[(?:[^\]|]*\|)?([^\]]+)\]\]")
 _FLAG = re.compile(r"\[(BLOCKED|ON HOLD|WAITING[^\]]*|OVERDUE[^\]]*)\]", re.I)
 
@@ -575,11 +582,19 @@ def _panel_priorities(p):
         if not section or section in skip or (want and section not in want):
             continue
         m = _BOLD_ITEM.match(line)
-        if not m:
-            continue
+        if m:
+            lead = m.group(1)
+        else:
+            # Plain bullets too: the startup cache is a Gemini summary,
+            # '- One sentence. "exact source quote"' -- keep the sentence.
+            m = _PLAIN_ITEM.match(line)
+            if not m:
+                continue
+            q = _QUOTE_TAIL.match(m.group(1))
+            lead = q.group(1) if q else m.group(1)
         # A flag can sit inside the bold or just after it; look at both.
         flag = _FLAG.search(line)
-        title = _WIKILINK.sub(r"\1", m.group(1)).replace("`", "")
+        title = _WIKILINK.sub(r"\1", lead).replace("`", "")
         title = _FLAG.sub("", title)
         # Drop dated/ID-ish asides ("(found 2026-08-11)", "(`KB5120249`)"),
         # keep short naming ones ("Phase 2 (Hearth dashboard)").
@@ -609,6 +624,156 @@ def _panel_priorities(p):
 
 _PANEL_SOURCES = (("calendar", _panel_calendar), ("weather", _panel_weather),
                   ("priorities", _panel_priorities))
+
+# --- system health card ("system" in panels) ---------------------------------
+# Live CPU / RAM / GPU / disk, standard library only: Win32 calls via ctypes
+# for CPU and RAM, shutil for disks, nvidia-smi for the GPU. Runs on its own
+# short-interval thread (the slow loop above is for network sources). Any
+# piece that fails just drops its rows. No CPU temperature: Windows doesn't
+# expose it without admin rights or a helper like LibreHardwareMonitor.
+SYSTEM = PANELS.get("system") if isinstance(PANELS.get("system"), dict) else None
+SYSTEM_INTERVAL_S = max(2.0, float((SYSTEM or {}).get("interval_seconds", 5)))
+_cpu_prev = None
+_nvsmi_missing = False
+
+
+def _cpu_pct():
+    """Whole-machine CPU busy % since the previous call (None on the first
+    call or off Windows). GetSystemTimes' kernel time includes idle."""
+    global _cpu_prev
+    import ctypes
+    from ctypes import wintypes
+    idle, kern, user = (wintypes.FILETIME() for _ in range(3))
+    if not ctypes.windll.kernel32.GetSystemTimes(
+            ctypes.byref(idle), ctypes.byref(kern), ctypes.byref(user)):
+        return None
+    now = tuple((f.dwHighDateTime << 32) | f.dwLowDateTime
+                for f in (idle, kern, user))
+    prev, _cpu_prev = _cpu_prev, now
+    if not prev:
+        return None
+    d_idle, d_kern, d_user = (a - b for a, b in zip(now, prev))
+    total = d_kern + d_user
+    return max(0.0, min(100.0, 100.0 * (1 - d_idle / total))) if total else None
+
+
+def _ram():
+    """(used_bytes, total_bytes) from GlobalMemoryStatusEx."""
+    import ctypes
+    from ctypes import wintypes
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [("dwLength", wintypes.DWORD),
+                    ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+    m = MEMORYSTATUSEX()
+    m.dwLength = ctypes.sizeof(m)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+        return None
+    return m.ullTotalPhys - m.ullAvailPhys, m.ullTotalPhys
+
+
+def _gpu():
+    """[(name, util%, temp C, vram used MiB, vram total MiB)] via nvidia-smi;
+    [] if it isn't installed (and we stop asking)."""
+    global _nvsmi_missing
+    if _nvsmi_missing:
+        return []
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,temperature.gpu,"
+             "memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, creationflags=_NO_WINDOW)
+    except FileNotFoundError:
+        _nvsmi_missing = True
+        return []
+    gpus = []
+    for line in out.stdout.strip().splitlines():
+        f = [x.strip() for x in line.split(",")]
+        if len(f) == 5:
+            try:
+                gpus.append((f[0], float(f[1]), float(f[2]),
+                             float(f[3]), float(f[4])))
+            except ValueError:
+                continue
+    return gpus
+
+
+def _gb(b):
+    return f"{b / 1024 ** 3:.1f}"
+
+
+def _panel_system(s):
+    hot_pct = float(s.get("hot_pct", 90))
+    hot_temp = float(s.get("hot_gpu_temp", 80))
+    rows = []
+    for label, fn in (("CPU", _cpu_pct), ("RAM", _ram), ("GPU", _gpu)):
+        try:
+            v = fn()
+        except Exception:
+            continue
+        if v is None:
+            continue
+        # "gauge" rows draw as round dials (core.js); the rest stay text+bar
+        if label == "CPU":
+            rows.append({"gauge": True, "label": "CPU",
+                         "value": f"{round(v)}%", "pct": v,
+                         "hot": v >= hot_pct})
+        elif label == "RAM":
+            used, total = v
+            p = 100.0 * used / total if total else 0
+            rows.append({"gauge": True, "label": "RAM",
+                         "value": f"{round(p)}%", "pct": p,
+                         "sub": f"{_gb(used)}/{_gb(total)} GB",
+                         "hot": p >= hot_pct})
+        else:
+            for name, util, temp, vu, vt in v:
+                rows.append({"gauge": True, "label": "GPU",
+                             "value": f"{round(util)}%", "pct": util,
+                             "hot": util >= hot_pct})
+                p = 100.0 * vu / vt if vt else 0
+                rows.append({"gauge": True, "label": "VRAM",
+                             "value": f"{round(p)}%", "pct": p,
+                             "sub": f"{vu / 1024:.1f}/{vt / 1024:.1f} GB",
+                             "hot": p >= hot_pct})
+                # temp dial runs 30-100°C, like a car's cold-to-hot needle
+                rows.append({"gauge": True, "label": "GPU TEMP",
+                             "value": f"{round(temp)}°C",
+                             "pct": max(0.0, min(100.0,
+                                                 (temp - 30) / 70 * 100)),
+                             "hot": temp >= hot_temp})
+    for d in s.get("disks", ["C:\\"]):
+        try:
+            u = shutil.disk_usage(d)
+        except OSError:
+            continue
+        p = 100.0 * u.used / u.total if u.total else 0
+        rows.append({"label": d.rstrip("\\/") or d, "value": f"{_gb(u.used)} "
+                     f"/ {_gb(u.total)} GB", "pct": p, "hot": p >= hot_pct})
+    for r in rows:
+        if not r.get("hot"):
+            r.pop("hot", None)
+    return {"id": "system", "side": s.get("side", "right"),
+            "title": s.get("title", "System"), "rows": rows,
+            **({} if rows else {"note": "No readings"})}
+
+
+def _system_loop():
+    _panel_system(SYSTEM)           # primes the CPU sample; first % is None
+    while True:
+        time.sleep(SYSTEM_INTERVAL_S)
+        try:
+            card = _panel_system(SYSTEM)
+        except Exception:
+            continue
+        with _panel_lock:
+            _panel_cache["system"] = card
 
 
 def _refresh_panels():
@@ -697,6 +862,10 @@ class Handler(BaseHTTPRequestHandler):
                        "suggest": suggest_enabled(),
                        "chat_width": CFG.get("chat_width", 960),
                        "panels": PANELS_ON,
+                       # the browser polls /panels this often; the system
+                       # card is live, everything else changes slowly
+                       "panels_poll_seconds":
+                           SYSTEM_INTERVAL_S if SYSTEM else 60,
                        "faces": list_faces(),
                        "agent": read_agent_meta()}
                 self._send(json.dumps(out).encode(), "application/json")
@@ -917,6 +1086,8 @@ if __name__ == "__main__":
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     if PANELS_ON:
         threading.Thread(target=_panel_loop, daemon=True).start()
+        if SYSTEM:
+            threading.Thread(target=_system_loop, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
