@@ -555,7 +555,7 @@ def _panel_calendar(c):
 
 _BOLD_ITEM = re.compile(r"^\s*[-*]\s+\*\*(.+?)\*\*")
 _PLAIN_ITEM = re.compile(r"^\s*[-*]\s+(\S.*)$")
-_QUOTE_TAIL = re.compile(r'^(.*?[.!?])\s+"')
+_QUOTE_TAIL = re.compile(r'^(.*?[.!?:])\s+"')  # 3.8 Flash writes 'Item: "quote"'
 _WIKILINK = re.compile(r"\[\[(?:[^\]|]*\|)?([^\]]+)\]\]")
 _FLAG = re.compile(r"\[(BLOCKED|ON HOLD|WAITING[^\]]*|OVERDUE[^\]]*)\]", re.I)
 
@@ -591,7 +591,7 @@ def _panel_priorities(p):
             if not m:
                 continue
             q = _QUOTE_TAIL.match(m.group(1))
-            lead = q.group(1) if q else m.group(1)
+            lead = q.group(1).rstrip(":") if q else m.group(1)
         # A flag can sit inside the bold or just after it; look at both.
         flag = _FLAG.search(line)
         title = _WIKILINK.sub(r"\1", lead).replace("`", "")
