@@ -29,6 +29,8 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
                                      own thinking sound (we stay quiet)
             "context": {used,max,pct},  context-window fill, after each turn
                                      (empty until the first turn publishes)
+            "cache": {at,rebuilt,ttl},  prompt-cache clock, after each turn
+                                     (at = null when known cold)
             "permission": {id,tool,what,detail,phase}}  present only while
                                      a permission ask waits; the chat box
                                      draws an approve/deny card and answers
@@ -88,6 +90,7 @@ line (backtalk writes it natively, github.com/jaredrhod/backtalk):
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed
   .voice_context      optional: JSON {used, max, pct} context-window fill
+  .voice_cache        optional: JSON {at, rebuilt, ttl} prompt-cache clock
   .voice_permission   optional: JSON {ts,id,tool,what,detail,phase} — present
                       only while a permission ask waits for an answer
   .voice_transcript.jsonl  one JSON object per line, {ts, role, text}
@@ -225,6 +228,7 @@ def mock_bus():
                 "seven_day": {"utilization": 0.61, "resets_at": t + 288000},
             },
             "context": {"used": 47000, "max": 200000, "pct": 23.5},
+            "cache": {"at": t - 900, "rebuilt": False, "ttl": 3600},
             "permission": permission}
 
 
@@ -271,6 +275,13 @@ def read_bus():
         context = json.loads((BUS / ".voice_context").read_text())
     except (OSError, ValueError):
         pass
+    # Prompt-cache clock, published after every turn. Always on (timing,
+    # not spend), empty until the first turn writes it.
+    cache = {}
+    try:
+        cache = json.loads((BUS / ".voice_cache").read_text())
+    except (OSError, ValueError):
+        pass
     # Present only while a permission ask is waiting for an answer; the
     # voice line removes the file the instant it resolves. A face draws
     # an approve/deny card off this and answers via /send ("yes"/"no").
@@ -289,7 +300,7 @@ def read_bus():
         pass
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
-            "context": context, "permission": permission,
+            "context": context, "cache": cache, "permission": permission,
             "session": session}
 
 

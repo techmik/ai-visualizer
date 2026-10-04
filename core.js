@@ -168,6 +168,9 @@ const AV = (() => {
     // Context-window fill {used, max, pct}, published after each turn.
     // The chat status row draws it; other faces ignore it.
     A.context = raw.context || {};
+    // Prompt-cache clock {at, rebuilt, ttl}, published after each turn
+    // (at = null when known cold). The chat status row counts it down.
+    A.cache = raw.cache || {};
     // A permission ask waiting for an answer, or {} when none. The chat
     // box draws an approve/deny card off this; other faces ignore it.
     A.permission = raw.permission || {};
@@ -335,6 +338,7 @@ const AV = (() => {
       '<div id="av-chat-status">' +
       '<span id="av-chat-mode"></span>' +
       '<span id="av-chat-meta">' +
+      '<span id="av-chat-cache"></span>' +
       '<span id="av-chat-ctx"></span><span id="av-chat-model"></span>' +
       '</span></div>';
     document.body.appendChild(wrap);
@@ -434,6 +438,7 @@ const AV = (() => {
       #av-chat-meta{display:flex;gap:12px;align-items:center}
       #av-chat-ctx{color:#8b857b;display:flex;align-items:center;gap:6px}
       #av-chat-ctx:empty{display:none}
+      #av-chat-cache:empty{display:none}
       #av-chat-ctx .av-ctx-bar{width:44px;height:4px;border-radius:2px;
         background:rgba(255,255,255,.12);overflow:hidden}
       #av-chat-ctx .av-ctx-fill{display:block;height:100%;
@@ -478,6 +483,7 @@ const AV = (() => {
     const modeEl = wrap.querySelector("#av-chat-mode");
     const modelEl = wrap.querySelector("#av-chat-model");
     const ctxEl = wrap.querySelector("#av-chat-ctx");
+    const cacheEl = wrap.querySelector("#av-chat-cache");
     const attachBtn = wrap.querySelector("#av-chat-attach");
     const fileInput = wrap.querySelector("#av-chat-file");
     const fileTray = wrap.querySelector("#av-chat-files");
@@ -759,6 +765,39 @@ const AV = (() => {
     }
     paintCtx();
     setInterval(paintCtx, 1000);
+
+    // Prompt-cache countdown beside the context readout, like the desktop
+    // status band: green while warm, yellow in the last 10 minutes (or the
+    // last fifth of a short cache), red once cold. Nothing shows until the
+    // first turn publishes a stamp.
+    const mmss = s => {
+      s = Math.max(0, Math.round(s));
+      const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+      return h ? h + "h " + m + "m" : m ? m + "m" : s + "s";
+    };
+    function paintCache() {
+      const c = A.cache || {};
+      if (!("at" in c)) { cacheEl.textContent = ""; return; }
+      if (c.at == null) {
+        cacheEl.textContent = "● cache cold";
+        cacheEl.style.color = "#e0736e";
+        return;
+      }
+      const ttl = c.ttl || 3600;
+      const idle = Date.now() / 1000 - c.at;
+      const left = ttl - idle;
+      if (left <= 0) {
+        cacheEl.textContent = "● cache cold · idle " + mmss(idle);
+        cacheEl.style.color = "#e0736e";
+        return;
+      }
+      cacheEl.textContent = "● cache warm " + mmss(left)
+        + (c.rebuilt ? " (rebuilt)" : "");
+      cacheEl.style.color = left <= Math.min(600, ttl / 5) ? "#e7c368"
+        : "rgba(140,220,180,.75)";
+    }
+    paintCache();
+    setInterval(paintCache, 1000);
 
     let seen = 0;
     setInterval(async () => {
