@@ -437,7 +437,7 @@ def suggest_reply(turns):
         body = json.dumps({
             "contents": [{"parts": [
                 {"text": SUGGEST_PROMPT + "\n".join(convo)}]}],
-            "generationConfig": {"maxOutputTokens": 120, "temperature": 0.7},
+            "generationConfig": {"maxOutputTokens": 120},
         }).encode()
         req = urllib.request.Request(
             SUGGEST_URL, data=body, method="POST",
